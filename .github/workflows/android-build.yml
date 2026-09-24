@@ -469,6 +469,42 @@ jobs:
             grep -E 'Pkg.Revision|Pkg.Desc' "$NDK_SOURCE_PROPS" || true
           fi
 
+      - name: Verify Qt is findable before configuring
+        run: |
+          set -euo pipefail
+          echo "### CMAKE_PREFIX_PATH will be: ${QT_ROOT_DIR}"
+          echo "### QT_HOST_PATH will be:     ${QT_HOST_PATH}"
+          echo
+
+          HOST_CONFIG="${QT_ROOT_DIR}/lib/cmake/Qt6/Qt6Config.cmake"
+          echo "### Target Qt6Config:"
+          ls -l "$HOST_CONFIG" || { echo "::error::missing $HOST_CONFIG"; exit 1; }
+          echo
+          echo "### Head of Qt6Config.cmake:"
+          head -20 "$HOST_CONFIG"
+          echo
+
+          # Qt for Android ships a Qt6 config that knows about cross compiling.
+          # If a *_toolchain or Android specific file is missing, find_package
+          # will fall back to a host build and the compile will use the wrong
+          # architecture.
+          echo "### Android specific Qt cmake files:"
+          ls "$QT_ROOT_DIR/lib/cmake/Qt6/" | head -40
+          echo
+          echo "### Qt6Core package dir:"
+          ls "$QT_ROOT_DIR/lib/cmake/Qt6Core/" | head -20
+          echo
+
+          # Prove the library really is an Android arm64 binary.
+          CORE_LIB=$(find "$QT_ROOT_DIR/lib" -maxdepth 1 -name 'libQt6Core*.so*' | head -1)
+          echo "### libQt6Core: $CORE_LIB"
+          if [ -n "$CORE_LIB" ]; then
+            file "$CORE_LIB" || true
+          fi
+          echo
+          echo "### android_arm64_v8a directory listing:"
+          ls "$QT_ROOT_DIR" || true
+
       - name: Configure
         run: |
           set -euo pipefail
@@ -478,18 +514,38 @@ jobs:
           echo "ANDROID_NDK_HOME  = ${ANDROID_NDK_HOME}"
           echo "ANDROID_SDK_ROOT  = ${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           echo
+
+          # The Android toolchain file sets
+          #     CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY
+          # with CMAKE_FIND_ROOT_PATH pointed at the NDK sysroot. In that mode
+          # CMAKE_PREFIX_PATH is ignored for find_package(), which is why the
+          # previous revision failed with "Could not find a package
+          # configuration file provided by Qt6".
+          #
+          # CMAKE_FIND_ROOT_PATH_MODE_PACKAGE tells CMake how far up to search:
+          #   BOTH      look in the sysroot and the host roots
+          #   ONLY      look only in CMAKE_FIND_ROOT_PATH
+          #   NEVER     ignore the root path entirely
+          # Qt lives outside the sysroot, so BOTH plus an explicit root path is
+          # what makes find_package(Qt6) succeed.
           echo "### Configuring"
           cmake -S . -B build-android \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${QT_HOST_PATH}" \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM="android-${{ env.ANDROID_API_LEVEL }}" \
             -DANDROID_STL=c++_shared \
             -DANDROID_NDK="${ANDROID_NDK_HOME}" \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
+            -DCMAKE_FIND_ROOT_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot;${QT_ROOT_DIR}" \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
             -DQT_HOST_PATH="${QT_HOST_PATH}" \
-            -DQT_ANDROID_BUILD_ALL_ABIS=OFF
+            -DQT_ANDROID_BUILD_ALL_ABIS=OFF \
+            -DQT_ANDROID_ABIS=arm64-v8a
 
       - name: Build
         run: |
