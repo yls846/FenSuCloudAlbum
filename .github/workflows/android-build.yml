@@ -33,9 +33,12 @@ env:
   QT_VERSION: "6.7.2"
   ANDROID_API_LEVEL: "34"
   ANDROID_BUILD_TOOLS: "34.0.0"
-  # NDK 25.2 is what Qt 6.7 was built and tested against. 26.x changes some
-  # linker defaults that this project does not need.
-  NDK_VERSION: "25.2.9519653"
+  # NDK must be able to target ANDROID_API_LEVEL. NDK 25.2 tops out at API 33
+  # and its toolchain refuses android-34 outright:
+  #     android-34 is above the maximum supported version 33.
+  # NDK 26.1 is the version Qt 6.7 was built and tested against and supports
+  # API 34.
+  NDK_VERSION: "26.1.10909125"
   # Install Qt outside the checkout so the working tree stays clean and the
   # ~4 GB of Qt does not end up inside the repository directory.
   QT_INSTALL_DIR: "/opt/Qt"
@@ -428,29 +431,43 @@ jobs:
           echo "### Accepting SDK licences"
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
-          echo "### Installing NDK, platform and build tools"
-          sdkmanager --install \
-            "ndk;${{ env.NDK_VERSION }}" \
-            "platforms;android-${{ env.ANDROID_API_LEVEL }}" \
-            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" 2>&1 | tail -20
-
-          echo "### SDK root: ${SDK}"
-          echo "### NDK directories:"
-          ls "${SDK}/ndk" || true
-
           NDK_DIR="${SDK}/ndk/${{ env.NDK_VERSION }}"
+          if [ -d "$NDK_DIR" ]; then
+            echo "### NDK already present: $NDK_DIR"
+          else
+            echo "### Installing NDK, platform and build tools"
+            sdkmanager --install \
+              "ndk;${{ env.NDK_VERSION }}" \
+              "platforms;android-${{ env.ANDROID_API_LEVEL }}" \
+              "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" 2>&1 | tail -20
+          fi
+
           if [ ! -d "$NDK_DIR" ]; then
             echo "::error::NDK not found at $NDK_DIR"
             echo "### Available NDK versions:"
             ls "${SDK}/ndk" || true
             exit 1
           fi
+
+          # The platform is always ensured, even when the NDK came from cache.
+          if [ ! -d "${SDK}/platforms/android-${{ env.ANDROID_API_LEVEL }}" ]; then
+            sdkmanager --install "platforms;android-${{ env.ANDROID_API_LEVEL }}" 2>&1 | tail -5
+          fi
+
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
           echo "### NDK: $NDK_DIR"
+          echo "### Installed NDK versions:"; ls "${SDK}/ndk" || true
+          echo "### Installed platforms:"; ls "${SDK}/platforms" || true
+          echo "### Installed build-tools:"; ls "${SDK}/build-tools" || true
 
-          echo "### Platform: ${SDK}/platforms/android-${{ env.ANDROID_API_LEVEL }}"
-          ls "${SDK}/platforms" || true
+          # NDK 25 refuses API 34; make the pairing explicit so a future bump
+          # of one without the other is caught here and not at configure time.
+          NDK_SOURCE_PROPS="$NDK_DIR/source.properties"
+          if [ -f "$NDK_SOURCE_PROPS" ]; then
+            echo "### NDK properties:"
+            grep -E 'Pkg.Revision|Pkg.Desc' "$NDK_SOURCE_PROPS" || true
+          fi
 
       - name: Configure
         run: |
