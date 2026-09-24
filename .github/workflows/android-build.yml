@@ -491,6 +491,37 @@ jobs:
 
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
+
+          # The runner image ships extra platform revisions, including preview
+          # ones such as android-36-ext19. androiddeployqt picks the highest
+          # platform it can find and hands it to Gradle as compileSdk, and the
+          # Android Gradle Plugin bundled with Qt 6.7.2 (7.4.1) was only tested
+          # up to compileSdk 33. Building against that preview platform fails
+          # inside aapt2 with
+          #     RES_TABLE_TYPE_TYPE entry offsets overlap actual entry data
+          #     Failed to load resources table in APK .../android-36-ext19/android.jar
+          #
+          # Remove every revision except the one this project targets, so
+          # androiddeployqt has exactly one platform to choose from.
+          echo "### Platform revisions present:"
+          ls "$SDK/platforms" || true
+          for p in "$SDK"/platforms/*; do
+            [ -d "$p" ] || continue
+            name=$(basename "$p")
+            if [ "$name" = "android-${{ env.ANDROID_API_LEVEL }}" ]; then
+              continue
+            fi
+            echo "### Removing $name, keeping android-${{ env.ANDROID_API_LEVEL }}"
+            rm -rf "$p"
+          done
+          echo "### Platform revisions remaining:"
+          ls "$SDK/platforms" || true
+
+          REMAINING=$(ls "$SDK/platforms" 2>/dev/null | wc -l)
+          if [ "$REMAINING" -ne 1 ]; then
+            echo "::error::Expected exactly one platform after cleanup, found $REMAINING"
+            exit 1
+          fi
           echo "### NDK: $NDK_DIR"
           echo "### Platform: $PLATFORM_DIR"
           echo "### Build tools: $TOOLS_DIR"
