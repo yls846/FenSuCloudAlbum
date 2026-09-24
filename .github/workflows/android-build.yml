@@ -201,17 +201,64 @@ jobs:
           echo "OK: $REL is listed in QML_FILES and exists."
           echo "OK: expected resource path is ${EXPECTED_PREFIX}${REL}"
 
+      - name: Verify QML property names are legal
+        run: |
+          set -euo pipefail
+          # QML parses any identifier shaped  on + UpperCase  as a signal
+          # handler, so `readonly property color onPrimary: "#fff"` is read as
+          # an assignment to a signal called Primary and the file fails with
+          #     Cannot assign a value to a signal (expecting a script to be run)
+          # One such name made the whole Theme singleton unloadable, which
+          # cascaded into every component importing it and left a blank screen.
+          python3 - <<'PYEOF'
+          import os, re, sys
+
+          prop = re.compile(
+              r"^\s*(?:readonly\s+)?(?:default\s+)?property\s+"
+              r"[A-Za-z_][A-Za-z0-9_.<>]*\s+([A-Za-z_][A-Za-z0-9_]*)")
+          signal_like = re.compile(r"^on[A-Z]")
+
+          bad = []
+          count = 0
+          for dp, _, files in os.walk("src/ui/qml"):
+              for fn in sorted(files):
+                  if not fn.endswith(".qml"):
+                      continue
+                  p = os.path.join(dp, fn)
+                  for n, line in enumerate(open(p, encoding="utf-8"), 1):
+                      code = line.split("//")[0]
+                      m = prop.match(code)
+                      if not m:
+                          continue
+                      count += 1
+                      if signal_like.match(m.group(1)):
+                          bad.append((p, n, m.group(1)))
+
+          print(f"checked {count} property declarations")
+          for p, n, name in bad:
+              print(f"::error file={p},line={n}::'{name}' matches on+UpperCase "
+                    f"and QML will read it as a signal handler")
+          if bad:
+              sys.exit(1)
+          print("All property names are legal.")
+          PYEOF
+
       - name: Verify every QML file using Theme imports the module
         run: |
           set -euo pipefail
+          # Comments are stripped before looking for Theme.<something>.
+          # A comment mentioning Theme.qml would otherwise look like a use and
+          # produce a false failure, which is exactly what happened once this
+          # step was added.
           fail=0
           for f in $(find src/ui/qml -name '*.qml' | sort); do
-            if grep -qE '[^A-Za-z0-9_]Theme\.' "$f"; then
-              if ! grep -qE '^import[[:space:]]+FenSuCloudAlbum[[:space:]]*$' "$f"; then
-                echo "::error file=$f::uses Theme.* but does not import FenSuCloudAlbum"
-                fail=1
-              else
+            code=$(sed 's|//.*||' "$f")
+            if printf '%s\n' "$code" | grep -qE '[^A-Za-z0-9_]Theme\.'; then
+              if printf '%s\n' "$code" | grep -qE '^import[[:space:]]+FenSuCloudAlbum[[:space:]]*$'; then
                 echo "  OK  $f"
+              else
+                echo "::error file=$f::uses Theme.<property> but does not import FenSuCloudAlbum"
+                fail=1
               fi
             else
               echo "  --  $f (no Theme usage)"

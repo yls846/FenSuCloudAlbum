@@ -21,7 +21,20 @@ QtObject {
     readonly property color outline: "#DADCE0"
 
     readonly property color primary: "#1A73E8"
-    readonly property color onPrimary: "#FFFFFF"
+
+    // Text and icons drawn on top of `primary`.
+    //
+    // This was called onPrimary, which QML rejects:
+    //     Theme.qml:24: Cannot assign a value to a signal
+    //     (expecting a script to be run)
+    // In QML any identifier matching  on + UpperCase  is parsed as a signal
+    // handler, so `onPrimary:` reads as "assign to the Primary signal". The
+    // whole Theme singleton failed to load, which cascaded:
+    //     Theme unavailable -> AlbumCard unavailable
+    //                       -> AlbumsPage unavailable
+    //                       -> the root component never loaded, blank screen.
+    // The name avoids the `on` prefix for that reason.
+    readonly property color primaryText: "#FFFFFF"
 
     readonly property color textPrimary: "#202124"
     readonly property color textSecondary: "#5F6368"
