@@ -650,8 +650,7 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
             -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
             -DQT_HOST_PATH="${QT_HOST_PATH}" \
-            -DQT_ANDROID_BUILD_ALL_ABIS=OFF \
-            -DQT_ANDROID_ABIS=arm64-v8a
+            -DQT_ANDROID_BUILD_ALL_ABIS=OFF
 
       - name: Build
         run: |
@@ -722,6 +721,29 @@ jobs:
           else
             echo "::error::The application library is not in the APK"
             exit 1
+          fi
+
+          # The AndroidManifest declares the library name Qt's QtActivity
+          # loads with System.loadLibrary(). If the packaged file name carries
+          # an ABI suffix that the manifest does not, the loader cannot find it
+          # and the process dies before main() runs, with no Qt log output at
+          # all. That is exactly what happened with
+          #     file:     libFenSuCloudAlbum_arm64-v8a.so
+          #     lib_name: FenSuCloudAlbum      -> looks for libFenSuCloudAlbum.so
+          # The suffix comes from passing -DQT_ANDROID_ABIS, which tells Qt to
+          # treat this as a multi-ABI build. ANDROID_ABI alone is the single
+          # ABI case and produces an unsuffixed name.
+          echo "### Library name vs manifest lib_name"
+          EXPECTED_LIB="libFenSuCloudAlbum.so"
+          if printf '%s\n' "$NATIVE" | grep -qxE ".*/${EXPECTED_LIB}"; then
+            echo "  OK   ${EXPECTED_LIB} is present, matching android.app.lib_name"
+          else
+            echo "::warning::No ${EXPECTED_LIB} in the APK."
+            echo "::warning::android.app.lib_name is FenSuCloudAlbum, so QtActivity"
+            echo "::warning::will call System.loadLibrary(\"FenSuCloudAlbum\") and"
+            echo "::warning::the process will die before main() with no Qt log."
+            echo "### Libraries that were packaged for the application:"
+            printf '%s\n' "$NATIVE" | grep -i fensu || true
           fi
 
           if [ "$fail" -ne 0 ]; then
