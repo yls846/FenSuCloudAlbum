@@ -3,6 +3,10 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+// QML_ELEMENT and QML_UNCREATABLE below are defined here. Without it the
+// compiler reports "unknown type name 'QML_ELEMENT'" and then a cascade of
+// follow-on errors, including the constructor declaration going missing.
+#include <QtQml/qqmlregistration.h>
 
 #include <memory>
 

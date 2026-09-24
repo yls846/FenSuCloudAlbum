@@ -17,6 +17,12 @@
 #include <QFont>
 #include <QStandardPaths>
 #include <QDirIterator>
+// QDir::Files is passed to the QDirIterator constructor below. QDirIterator
+// pulls QDir in today because its own signature needs it, but the dependency
+// is stated here as well.
+#include <QDir>
+// QCoreApplication::exit() is used below. QGuiApplication derives from it.
+#include <QCoreApplication>
 #include <QDebug>
 // Used directly in this file: Qt::QueuedConnection, QObject::connect and the
 // QObject* parameter of the lambda. QGuiApplication happens to pull them in
