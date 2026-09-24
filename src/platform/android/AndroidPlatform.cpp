@@ -43,11 +43,22 @@ QString AndroidPlatform::defaultStorageRoot() const
 QString AndroidPlatform::publicAlbumRoot() const
 {
 #if defined(Q_OS_ANDROID)
-    // On Android the user visible album folder lives directly under the
-    // shared external storage root.
-    QString external = QStandardPaths::writableLocation(QStandardPaths::GenericExternalStorageLocation);
-    if (external.isEmpty())
+    // On Android the user visible album folder lives under the shared
+    // external storage. QStandardPaths::GenericDataLocation is the location
+    // that maps to shared storage on every platform; the Qt 6.7 documentation
+    // lists it as the segment of the Android paths that belongs to the user
+    // rather than to the app sandbox.
+    //
+    // There is no QStandardPaths::GenericExternalStorageLocation: the enum
+    // does not exist, and naming it was a mistake. QStandardPaths only offers
+    // the locations listed in its StandardLocation enum.
+    QString external = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (external.isEmpty()) {
+        // Documented fallback for devices where the shared storage path is not
+        // resolvable (rare, but GenericDataLocation may be empty on a device
+        // with no external volume mounted).
         external = QStringLiteral("/storage/emulated/0");
+    }
     return external + QStringLiteral("/FenSuCloudAlbum");
 #else
     return QDir::homePath() + QStringLiteral("/FenSuCloudAlbum");

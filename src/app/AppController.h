@@ -3,10 +3,6 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
-// QML_ELEMENT and QML_UNCREATABLE below are defined here. Without it the
-// compiler reports "unknown type name 'QML_ELEMENT'" and then a cascade of
-// follow-on errors, including the constructor declaration going missing.
-#include <QtQml/qqmlregistration.h>
 
 #include <memory>
 
@@ -31,8 +27,21 @@ class NetworkMonitor;
 class AppController : public QObject
 {
     Q_OBJECT
-    QML_ELEMENT
-    QML_UNCREATABLE("AppController is provided by C++ as context property `App`.")
+
+    // No QML_ELEMENT / QML_UNCREATABLE here on purpose.
+    //
+    // This object is handed to QML through
+    //     engine.rootContext()->setContextProperty("App", &controller)
+    // and QML only ever reaches it as `App.<something>`. It is never
+    // instantiated from QML and never referenced as a type, so registering it
+    // with the QML type system buys nothing.
+    //
+    // Registering it also costs: Qt then generates a qmltyperegistrations
+    // translation unit containing
+    //     #include <AppController.h>
+    // without a path. The header lives at src/app/AppController.h, so that
+    // include does not resolve and the build fails with
+    //     fatal error: 'AppController.h' file not found
 
     Q_PROPERTY(bool ready READ isReady NOTIFY readyChanged)
     Q_PROPERTY(QString storageRoot READ storageRoot NOTIFY storageRootChanged)
