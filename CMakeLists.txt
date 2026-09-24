@@ -40,6 +40,17 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
 qt_standard_project_setup(REQUIRES 6.5)
 
 # ---------------------------------------------------------------------------
+# Qt policies
+# ---------------------------------------------------------------------------
+# QTP0002 governs android-specific target properties: they may contain
+# generator expressions but must evaluate to valid JSON. Without an explicit
+# setting, Qt 6.7 prints a developer warning on every Android configure.
+# qt_policy is only available after Qt has been found.
+if(COMMAND qt_policy)
+    qt_policy(SET QTP0002 NEW)
+endif()
+
+# ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
 set(APP_SOURCES

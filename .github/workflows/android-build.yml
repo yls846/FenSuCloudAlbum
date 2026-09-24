@@ -448,34 +448,52 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
           NDK_DIR="${SDK}/ndk/${{ env.NDK_VERSION }}"
-          if [ -d "$NDK_DIR" ]; then
-            echo "### NDK already present: $NDK_DIR"
-          else
-            echo "### Installing NDK, platform and build tools"
-            sdkmanager --install \
-              "ndk;${{ env.NDK_VERSION }}" \
-              "platforms;android-${{ env.ANDROID_API_LEVEL }}" \
-              "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" 2>&1 | tail -20
-          fi
+          PLATFORM_DIR="${SDK}/platforms/android-${{ env.ANDROID_API_LEVEL }}"
+          TOOLS_DIR="${SDK}/build-tools/${{ env.ANDROID_BUILD_TOOLS }}"
 
+          # Each component is checked and installed independently. Previously
+          # the platform and build-tools were installed inside the same else
+          # branch as the NDK, so a cached NDK would have left them missing.
           if [ ! -d "$NDK_DIR" ]; then
-            echo "::error::NDK not found at $NDK_DIR"
-            echo "### Available NDK versions:"
-            ls "${SDK}/ndk" || true
-            exit 1
+            echo "### Installing NDK ${{ env.NDK_VERSION }}"
+            sdkmanager --install "ndk;${{ env.NDK_VERSION }}" 2>&1 | tail -5
+          else
+            echo "### NDK present: $NDK_DIR"
           fi
 
-          # The platform is always ensured, even when the NDK came from cache.
-          if [ ! -d "${SDK}/platforms/android-${{ env.ANDROID_API_LEVEL }}" ]; then
+          if [ ! -d "$PLATFORM_DIR" ]; then
+            echo "### Installing platform android-${{ env.ANDROID_API_LEVEL }}"
             sdkmanager --install "platforms;android-${{ env.ANDROID_API_LEVEL }}" 2>&1 | tail -5
+          else
+            echo "### Platform present: $PLATFORM_DIR"
+          fi
+
+          if [ ! -d "$TOOLS_DIR" ]; then
+            echo "### Installing build-tools ${{ env.ANDROID_BUILD_TOOLS }}"
+            sdkmanager --install "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" 2>&1 | tail -5
+          else
+            echo "### Build tools present: $TOOLS_DIR"
+          fi
+
+          fail=0
+          for d in "$NDK_DIR" "$PLATFORM_DIR" "$TOOLS_DIR"; do
+            if [ ! -d "$d" ]; then
+              echo "::error::Required SDK component missing: $d"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "### Installed NDK:"; ls "${SDK}/ndk" || true
+            echo "### Installed platforms:"; ls "${SDK}/platforms" || true
+            echo "### Installed build-tools:"; ls "${SDK}/build-tools" || true
+            exit 1
           fi
 
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
           echo "### NDK: $NDK_DIR"
-          echo "### Installed NDK versions:"; ls "${SDK}/ndk" || true
-          echo "### Installed platforms:"; ls "${SDK}/platforms" || true
-          echo "### Installed build-tools:"; ls "${SDK}/build-tools" || true
+          echo "### Platform: $PLATFORM_DIR"
+          echo "### Build tools: $TOOLS_DIR"
 
           # NDK 25 refuses API 34; make the pairing explicit so a future bump
           # of one without the other is caught here and not at configure time.
@@ -521,6 +539,31 @@ jobs:
           echo "### android_arm64_v8a directory listing:"
           ls "$QT_ROOT_DIR" || true
 
+          # Qt resolves the Android SDK itself, from the CMake variable
+          # ANDROID_SDK_ROOT, and looks for build-tools underneath it. If that
+          # variable is ever empty the error it prints is
+          #     Could not locate Android SDK build tools under "/build-tools"
+          # which is hard to read. Check the three directories here so the
+          # failure names the missing piece.
+          echo
+          echo "### Android SDK components"
+          echo "ANDROID_SDK_ROOT = ${ANDROID_SDK_ROOT}"
+          for d in \
+              "${ANDROID_SDK_ROOT}/build-tools/${{ env.ANDROID_BUILD_TOOLS }}" \
+              "${ANDROID_SDK_ROOT}/platforms/android-${{ env.ANDROID_API_LEVEL }}" \
+              "${ANDROID_SDK_ROOT}/ndk/${{ env.NDK_VERSION }}" ; do
+            if [ -d "$d" ]; then
+              echo "  OK   $d"
+            else
+              echo "::error::Missing SDK component: $d"
+              exit 1
+            fi
+          done
+          echo "### build-tools revisions present:"
+          ls "${ANDROID_SDK_ROOT}/build-tools" || true
+          echo "### platform revisions present:"
+          ls "${ANDROID_SDK_ROOT}/platforms" || true
+
       - name: Configure
         run: |
           set -euo pipefail
@@ -544,6 +587,13 @@ jobs:
           #   NEVER     ignore the root path entirely
           # Qt lives outside the sysroot, so BOTH plus an explicit root path is
           # what makes find_package(Qt6) succeed.
+          # Qt walks up from ANDROID_SDK_ROOT/build-tools to find an installed
+          # build-tools revision. In the previous run the path it reported was
+          # literally "/build-tools", which means the CMake variable
+          # ANDROID_SDK_ROOT was empty. Exporting ANDROID_SDK_ROOT through
+          # $GITHUB_ENV only defines a shell environment variable; CMake does
+          # not turn that into a CMake variable, so Qt could not see it. It has
+          # to be passed on the command line.
           echo "### Configuring"
           cmake -S . -B build-android \
             -G Ninja \
@@ -553,6 +603,8 @@ jobs:
             -DANDROID_PLATFORM="android-${{ env.ANDROID_API_LEVEL }}" \
             -DANDROID_STL=c++_shared \
             -DANDROID_NDK="${ANDROID_NDK_HOME}" \
+            -DANDROID_SDK_ROOT="${ANDROID_SDK_ROOT}" \
+            -DANDROID_SDK_BUILD_TOOLS_REVISION="${{ env.ANDROID_BUILD_TOOLS }}" \
             -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
             -DCMAKE_FIND_ROOT_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot;${QT_ROOT_DIR}" \
             -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
