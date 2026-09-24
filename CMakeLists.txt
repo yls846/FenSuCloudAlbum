@@ -66,6 +66,10 @@ set(APP_SOURCES
     src/core/network/NetworkMonitor.cpp
 )
 
+set(PLATFORM_SOURCES
+    src/platform/android/AndroidPlatform.cpp
+)
+
 set(APP_HEADERS
     src/app/AppController.h
 
@@ -82,17 +86,7 @@ set(APP_HEADERS
     src/core/cache/CacheManager.h
 
     src/core/network/NetworkMonitor.h
-)
 
-# Platform specific sources.
-# AndroidPlatform is always compiled: the .cpp is internally guarded with
-# Q_OS_ANDROID so the same API exists on desktop, which lets main.cpp and the
-# application layer call it unconditionally.
-set(PLATFORM_SOURCES
-    src/platform/android/AndroidPlatform.cpp
-)
-
-list(APPEND APP_HEADERS
     src/platform/android/AndroidPlatform.h
 )
 
@@ -105,27 +99,47 @@ qt_add_executable(FenSuCloudAlbum
 # ---------------------------------------------------------------------------
 # QML module
 # ---------------------------------------------------------------------------
-# Theme.qml is declared `pragma Singleton`. Without marking it here, the
-# generated qmldir never contains the singleton registration and every
-# `Theme.xxx` reference in QML fails to resolve at runtime.
-set_source_files_properties(src/ui/qml/theme/Theme.qml
+# The QML sources live under src/ui/qml/ in several sub directories
+# (theme/, components/, pages/). Two properties make the generated qmldir and
+# the resource layout match what main.cpp loads:
+#
+#   QT_QML_SOURCE_DIRECTORY  tells Qt which directory is the module root, so
+#                            the files are registered as  Main.qml,
+#                            components/PhotoGrid.qml, ... rather than as
+#                            src/ui/qml/components/PhotoGrid.qml.
+#
+#   RESOURCE_PREFIX          keeps the well known  /qt/qml  prefix, so the
+#                            module ends up at
+#                            qrc:/qt/qml/FenSuCloudAlbum/  which is exactly
+#                            the URL main.cpp requests for Main.qml.
+#
+# Without QT_QML_SOURCE_DIRECTORY, Qt 6.5+ cannot deduce the module root from
+# multi directory QML_FILES lists and configuration fails.
+#
+set(FSCA_QML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml")
+
+# Theme.qml is declared `pragma Singleton`. Without this property the
+# generated qmldir has no singleton entry and every `Theme.xxx` reference in
+# QML fails to resolve at runtime.
+set_source_files_properties("${FSCA_QML_DIR}/theme/Theme.qml"
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE
 )
 
 qt_add_qml_module(FenSuCloudAlbum
     URI FenSuCloudAlbum
     VERSION 1.0
+    RESOURCE_PREFIX /qt/qml
+    QT_QML_SOURCE_DIRECTORY "${FSCA_QML_DIR}"
     QML_FILES
-        src/ui/qml/Main.qml
-        src/ui/qml/theme/Theme.qml
-        src/ui/qml/components/BottomNavBar.qml
-        src/ui/qml/components/PhotoGrid.qml
-        src/ui/qml/components/AlbumCard.qml
-        src/ui/qml/components/SectionHeader.qml
-        src/ui/qml/pages/AlbumsPage.qml
-        src/ui/qml/pages/AllPhotosPage.qml
-        src/ui/qml/pages/MemoriesPage.qml
-    RESOURCES
+        "${FSCA_QML_DIR}/Main.qml"
+        "${FSCA_QML_DIR}/theme/Theme.qml"
+        "${FSCA_QML_DIR}/components/BottomNavBar.qml"
+        "${FSCA_QML_DIR}/components/PhotoGrid.qml"
+        "${FSCA_QML_DIR}/components/AlbumCard.qml"
+        "${FSCA_QML_DIR}/components/SectionHeader.qml"
+        "${FSCA_QML_DIR}/pages/AlbumsPage.qml"
+        "${FSCA_QML_DIR}/pages/AllPhotosPage.qml"
+        "${FSCA_QML_DIR}/pages/MemoriesPage.qml"
 )
 
 # ---------------------------------------------------------------------------

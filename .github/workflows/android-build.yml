@@ -3,14 +3,21 @@ name: Android Build
 # ---------------------------------------------------------------------------
 # CI for FenSu Cloud Album (D version)
 # ---------------------------------------------------------------------------
-# The repository is Qt 6 / CMake / C++20. This workflow performs the two
-# things that cannot be done on the development device:
+# The repository is Qt 6 / CMake / C++20. This workflow does the two things
+# that cannot be done on the development device:
 #
 #   1. configure + compile the project for Android with the Qt 6 Android SDK
 #   2. produce a debug APK as a build artifact
 #
-# It runs on every push to main and on pull requests, so a broken CMake or
-# QML reference is caught before it reaches a device.
+# Design notes
+# ------------
+# Qt is installed with `aqtinstall` instead of a wrapper action. That keeps the
+# install path explicit (QT_ROOT_DIR) so CMake always finds it, and it avoids
+# depending on which environment variable a third party action happens to
+# export this month.
+#
+# Every step prints what it found. A red build must be diagnosable from the log
+# alone, without guessing.
 # ---------------------------------------------------------------------------
 
 on:
@@ -21,17 +28,185 @@ on:
   workflow_dispatch:
 
 env:
-  # Qt version used for the Android build. 6.7.2 ships a stable Android
-  # toolchain and matches the 6.5 minimum declared in CMakeLists.txt.
+  # 6.7.2 is the last 6.7 LTS and ships a stable Android toolchain.
+  # CMakeLists.txt declares 6.5 as the minimum.
   QT_VERSION: "6.7.2"
   ANDROID_API_LEVEL: "34"
   ANDROID_BUILD_TOOLS: "34.0.0"
-  NDK_VERSION: "26.1.10909125"
+  # NDK 25.2 is what Qt 6.7 was built and tested against. 26.x changes some
+  # linker defaults that this project does not need.
+  NDK_VERSION: "25.2.9519653"
+  QT_INSTALL_DIR: "${{ github.workspace }}/Qt"
 
 jobs:
+  # =========================================================================
+  # Job 1: fast repository consistency check (no Qt, no NDK, seconds)
+  # =========================================================================
+  sanity-check:
+    name: Repository sanity check
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify CMake references resolve
+        run: |
+          set -euo pipefail
+          echo "### Files referenced by CMakeLists.txt"
+          missing=0
+          while read -r f; do
+            if [ -f "$f" ]; then
+              echo "  OK   $f"
+            else
+              echo "::error file=$f::CMakeLists.txt references a missing file"
+              missing=1
+            fi
+          done < <(grep -oE 'src/[A-Za-z0-9_/]+\.(cpp|h|qml)' CMakeLists.txt | sort -u)
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Repository is inconsistent."
+            exit 1
+          fi
+          echo "All referenced files are present."
+
+      - name: Verify QML files are well formed
+        run: |
+          set -euo pipefail
+          echo "### QML files"
+          find src/ui/qml -name '*.qml' | sort | tee /tmp/qmlfiles.txt
+          echo
+          echo "### Balanced braces check"
+          while read -r f; do
+            open=$(tr -cd '{' < "$f" | wc -c)
+            close=$(tr -cd '}' < "$f" | wc -c)
+            if [ "$open" -ne "$close" ]; then
+              echo "::error file=$f::Unbalanced braces: $open open vs $close close"
+              exit 1
+            fi
+          done < /tmp/qmlfiles.txt
+          echo "All QML files have balanced braces."
+
+      - name: Verify the Theme singleton registration exists
+        run: |
+          set -euo pipefail
+          # Theme.qml is `pragma Singleton`; without the CMake property the
+          # generated qmldir has no singleton entry and every Theme.xxx
+          # reference fails at runtime. Catch that here in seconds.
+          if ! grep -q 'QT_QML_SINGLETON_TYPE' CMakeLists.txt; then
+            echo "::error::CMakeLists.txt is missing QT_QML_SINGLETON_TYPE for Theme.qml"
+            exit 1
+          fi
+          echo "Singleton registration is present."
+
+      - name: Verify the QML module root is declared
+        run: |
+          set -euo pipefail
+          # Qt 6.5+ cannot deduce the module root when QML_FILES live in
+          # several sub directories. Without QT_QML_SOURCE_DIRECTORY the
+          # configure step fails.
+          if ! grep -q 'QT_QML_SOURCE_DIRECTORY' CMakeLists.txt; then
+            echo "::error::CMakeLists.txt is missing QT_QML_SOURCE_DIRECTORY"
+            exit 1
+          fi
+          echo "QML module root is declared."
+
+      - name: Verify main.cpp loads a path the module actually exports
+        run: |
+          set -euo pipefail
+
+          # The real load call, not an example in a comment.
+          LOADED=$(grep -oE 'QUrl\s+url\(QStringLiteral\("(qrc:/qt/qml/[^"]+)"' src/main.cpp \
+                   | grep -oE 'qrc:/qt/qml/[^"]+')
+          if [ -z "$LOADED" ]; then
+            echo "::error::Could not find the QUrl the engine loads in src/main.cpp"
+            exit 1
+          fi
+
+          # Read the values out of the qt_add_qml_module call only, so a word
+          # in a comment can never be mistaken for a keyword argument.
+          MODULE_CALL=$(sed -n '/qt_add_qml_module(/,/^)/p' CMakeLists.txt)
+
+          URI=$(printf '%s\n' "$MODULE_CALL" \
+                | grep -oE '^[[:space:]]*URI[[:space:]]+[A-Za-z0-9_]+' \
+                | head -1 | awk '{print $2}')
+          # RESOURCE_PREFIX is optional; Qt defaults to /qt/qml.
+          PREFIX=$(printf '%s\n' "$MODULE_CALL" \
+                | grep -oE '^[[:space:]]*RESOURCE_PREFIX[[:space:]]+[^[:space:]]+' \
+                | head -1 | awk '{print $2}')
+          PREFIX=${PREFIX:-/qt/qml}
+
+          if [ -z "$URI" ]; then
+            echo "::error::Could not read the QML module URI from CMakeLists.txt"
+            exit 1
+          fi
+
+          EXPECTED="qrc:${PREFIX}/${URI}/"
+          echo "URI            : $URI"
+          echo "RESOURCE_PREFIX: $PREFIX"
+          echo "main.cpp loads : $LOADED"
+          echo "expected prefix: $EXPECTED"
+
+          case "$LOADED" in
+            "${EXPECTED}"*)
+              echo "OK: the loaded URL is inside the exported module."
+              ;;
+            *)
+              echo "::error::main.cpp loads $LOADED which is outside ${EXPECTED}"
+              exit 1
+              ;;
+          esac
+
+          # Resolve QT_QML_SOURCE_DIRECTORY, which is written as
+          #   "${FSCA_QML_DIR}"  with  set(FSCA_QML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml")
+          QMLDIR_RAW=$(grep -oE 'QT_QML_SOURCE_DIRECTORY[[:space:]]+"[^"]+"' CMakeLists.txt \
+                       | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          VAR=$(printf '%s' "$QMLDIR_RAW" | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | head -1)
+          if [ -n "$VAR" ] && [ "$VAR" != "$QMLDIR_RAW" ]; then
+            RESOLVED=$(grep -oE "set\($VAR[[:space:]]+\"[^\"]+\"" CMakeLists.txt \
+                       | sed 's/.*"\(.*\)".*/\1/' \
+                       | sed 's|\${CMAKE_CURRENT_SOURCE_DIR}|.|g')
+            QMLDIR=${RESOLVED:-$QMLDIR_RAW}
+          else
+            QMLDIR=$QMLDIR_RAW
+          fi
+          echo "QT_QML_SOURCE_DIRECTORY resolves to: $QMLDIR"
+
+          REL=${LOADED#"$EXPECTED"}
+          if [ ! -f "${QMLDIR}/${REL}" ]; then
+            echo "::error::${QMLDIR}/${REL} does not exist"
+            exit 1
+          fi
+          echo "OK: ${QMLDIR}/${REL} exists."
+
+      - name: Verify every QML file using Theme imports the module
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in $(find src/ui/qml -name '*.qml' | sort); do
+            if grep -qE '[^A-Za-z0-9_]Theme\.' "$f"; then
+              if ! grep -qE '^import[[:space:]]+FenSuCloudAlbum[[:space:]]*$' "$f"; then
+                echo "::error file=$f::uses Theme.* but does not import FenSuCloudAlbum"
+                fail=1
+              else
+                echo "  OK  $f"
+              fi
+            else
+              echo "  --  $f (no Theme usage)"
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All QML files using Theme import the module."
+
+  # =========================================================================
+  # Job 2: the real Android build
+  # =========================================================================
   build-android:
     name: Build Android APK
     runs-on: ubuntu-22.04
+    needs: sanity-check
 
     steps:
       - name: Checkout
@@ -43,63 +218,118 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Install build dependencies
+      - name: Install host build tools
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build \
             ccache \
             p7zip-full \
+            python3-pip \
             libgl1-mesa-dev \
             libxkbcommon-dev
+          echo "ninja: $(ninja --version)"
+          echo "cmake: $(cmake --version | head -1)"
 
-      - name: Cache Qt
-        id: cache-qt
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.tool_cache }}/Qt
-          key: qt-${{ env.QT_VERSION }}-android
+      - name: Install aqtinstall
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "aqtinstall==3.1.18"
+          aqt version
 
-      - name: Install Qt for Android
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: android
-          arch: android_arm64_v8a
-          dir: ${{ runner.tool_cache }}/Qt
-          cache: true
-          modules: 'qtnetworkauth'
+      - name: Install Qt ${{ env.QT_VERSION }} for Android
+        run: |
+          set -euo pipefail
+          mkdir -p "${QT_INSTALL_DIR}"
+          aqt install-qt linux android ${{ env.QT_VERSION }} android_arm64_v8a \
+            --outputdir "${QT_INSTALL_DIR}" \
+            --archives qtbase qtdeclarative qtsvg qtnetworkauth icu 2>&1 | tail -30
 
-      - name: Set up Android SDK / NDK
+      - name: Locate Qt and export its path
+        id: qt
+        run: |
+          set -euo pipefail
+          echo "### Looking for Qt under ${QT_INSTALL_DIR}"
+          find "${QT_INSTALL_DIR}" -maxdepth 4 -name 'Qt6Config.cmake' -print || true
+
+          QT_CONFIG=$(find "${QT_INSTALL_DIR}" -maxdepth 5 -name 'Qt6Config.cmake' -print -quit || true)
+          if [ -z "$QT_CONFIG" ]; then
+            echo "::error::Could not locate a Qt 6 installation."
+            find "${QT_INSTALL_DIR}" -maxdepth 4 -type d | head -40 || true
+            exit 1
+          fi
+          QT_ROOT=$(dirname "$(dirname "$QT_CONFIG")")
+          echo "Qt root: $QT_ROOT"
+          echo "qt_root=$QT_ROOT" >> "$GITHUB_OUTPUT"
+          echo "QT_ROOT_DIR=$QT_ROOT" >> "$GITHUB_ENV"
+
+          echo "### Qt cmake packages"
+          ls "$QT_ROOT/lib/cmake" | head -30 || true
+
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK
+      - name: Install NDK and platform
         run: |
-          sdkmanager "ndk;${{ env.NDK_VERSION }}" "platforms;android-${{ env.ANDROID_API_LEVEL }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install \
+            "ndk;${{ env.NDK_VERSION }}" \
+            "platforms;android-${{ env.ANDROID_API_LEVEL }}" \
+            "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" 2>&1 | tail -20
 
-      - name: Configure (CMake + Ninja)
+          echo "### SDK root: ${SDK}"
+          echo "### NDK directories:"
+          ls "${SDK}/ndk" || true
+
+          NDK_DIR="${SDK}/ndk/${{ env.NDK_VERSION }}"
+          if [ ! -d "$NDK_DIR" ]; then
+            echo "::error::NDK not found at $NDK_DIR"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "### NDK: $NDK_DIR"
+
+      - name: Configure
         run: |
+          set -euo pipefail
+          echo "### Environment"
+          echo "QT_ROOT_DIR       = ${QT_ROOT_DIR}"
+          echo "ANDROID_NDK_HOME  = ${ANDROID_NDK_HOME}"
+          echo "ANDROID_SDK_ROOT  = ${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          echo
+          echo "### Configuring"
           cmake -S . -B build-android \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-${{ env.ANDROID_API_LEVEL }} \
+            -DANDROID_PLATFORM="android-${{ env.ANDROID_API_LEVEL }}" \
             -DANDROID_STL=c++_shared \
+            -DANDROID_NDK="${ANDROID_NDK_HOME}" \
+            -DQT_HOST_PATH="${QT_ROOT_DIR}" \
             -DQT_ANDROID_BUILD_ALL_ABIS=OFF
 
       - name: Build
-        run: cmake --build build-android --parallel
+        run: |
+          set -euo pipefail
+          cmake --build build-android --parallel "$(nproc)" 2>&1 | tail -150
 
-      - name: Locate and stage APK
+      - name: Locate APK
         id: apk
         run: |
-          set -x
-          APK=$(find build-android -name "*.apk" -type f | head -n 1)
+          set -euo pipefail
+          echo "### Searching for APKs"
+          find build-android -name '*.apk' -type f -print || true
+          APK=$(find build-android -name '*.apk' -type f | head -n 1)
           if [ -z "$APK" ]; then
-            echo "::error::No APK was produced by the build."
+            echo "::error::The build succeeded but produced no APK."
+            find build-android -maxdepth 3 -type d | head -30
             exit 1
           fi
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
@@ -113,40 +343,3 @@ jobs:
           name: FenSuCloudAlbum-debug-apk
           path: artifacts/FenSuCloudAlbum-debug.apk
           if-no-files-found: error
-
-  # -------------------------------------------------------------------------
-  # A fast static check that does not need the Qt Android toolchain: it only
-  # verifies that the repository is consistent (CMake parses, no stray
-  # references to files that do not exist).
-  # -------------------------------------------------------------------------
-  sanity-check:
-    name: Repository sanity check
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Verify every referenced source file exists
-        run: |
-          set -e
-          missing=0
-          # Extract paths from the CMake source lists and check each one.
-          while read -r f; do
-            if [ -f "$f" ]; then
-              continue
-            fi
-            echo "::error file=$f::CMakeLists.txt references a missing file: $f"
-            missing=1
-          done < <(grep -oE 'src/[A-Za-z0-9_/]+\.(cpp|h|qml)' CMakeLists.txt | sort -u)
-
-          if [ "$missing" -ne 0 ]; then
-            echo "Repository is inconsistent, aborting."
-            exit 1
-          fi
-          echo "All files referenced by CMakeLists.txt are present."
-
-      - name: Check QML syntax (qmlformat parser only)
-        run: |
-          echo "QML files found:"
-          find src/ui/qml -name '*.qml' | sort

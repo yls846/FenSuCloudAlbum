@@ -49,7 +49,14 @@ int main(int argc, char *argv[])
     // Later stages may migrate to a proper singleton / qml type registration.
     engine.rootContext()->setContextProperty(QStringLiteral("App"), &controller);
 
-    const QUrl url(QStringLiteral("qrc:/qt/qml/FenSuCloudAlbum/src/ui/qml/Main.qml"));
+    // The QML module is registered with
+    //   URI               FenSuCloudAlbum
+    //   RESOURCE_PREFIX   /qt/qml
+    //   QT_QML_SOURCE_DIRECTORY  src/ui/qml
+    // so Main.qml (the module root file) is reachable at exactly this URL.
+    // Anything below src/ui/qml/ keeps its relative path, e.g.
+    // qrc:/qt/qml/FenSuCloudAlbum/pages/AlbumsPage.qml
+    const QUrl url(QStringLiteral("qrc:/qt/qml/FenSuCloudAlbum/Main.qml"));
 
     QObject::connect(
         &engine,
