@@ -363,13 +363,72 @@ jobs:
           echo "### All required Qt modules are present."
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          set -euo pipefail
+          # The ubuntu-22.04 runner image ships a complete Android SDK; there
+          # is no need for an extra setup action. The previous revision used
+          # android-actions/setup-android@v3, which runs
+          #     sdkmanager --install tools
+          # as part of its own bootstrap. Newer SDK repositories no longer
+          # publish a package called "tools", so sdkmanager exits 1 and the
+          # action fails before any of our steps run.
+          #
+          # Locate the SDK that is already present and, if it is not there,
+          # fall back to the standard command line tools location.
+          for candidate in \
+              "${ANDROID_SDK_ROOT:-}" \
+              "${ANDROID_HOME:-}" \
+              "/usr/local/lib/android/sdk" \
+              "/opt/android-sdk" ; do
+            if [ -n "$candidate" ] && [ -d "$candidate/cmdline-tools" ]; then
+              SDK="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "${SDK:-}" ]; then
+            echo "::error::No Android SDK found on this runner."
+            echo "### Searching:"
+            find / -maxdepth 5 -type d -name 'cmdline-tools' 2>/dev/null | head -20 || true
+            exit 1
+          fi
+
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "### SDK: $SDK"
+
+          # Put cmdline-tools on PATH so the next step can call sdkmanager directly.
+          # Prefer a "latest" directory; otherwise take any version directory.
+          if [ -d "$SDK/cmdline-tools/latest/bin" ]; then
+            BIN="$SDK/cmdline-tools/latest/bin"
+          else
+            BIN=""
+            for d in "$SDK"/cmdline-tools/*/bin; do
+              if [ -x "$d/sdkmanager" ]; then
+                BIN="$d"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$BIN" ] || [ ! -x "$BIN/sdkmanager" ]; then
+            echo "::error::sdkmanager not found under $SDK/cmdline-tools"
+            ls -la "$SDK/cmdline-tools" || true
+            exit 1
+          fi
+          echo "$BIN" >> "$GITHUB_PATH"
+          echo "### sdkmanager: $BIN/sdkmanager"
+          # --version is informational; some versions exit non-zero here.
+          "$BIN/sdkmanager" --version 2>&1 | tail -3 || true
 
       - name: Install NDK and platform
         run: |
           set -euo pipefail
-          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          SDK="${ANDROID_SDK_ROOT}"
+          echo "### Accepting SDK licences"
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+          echo "### Installing NDK, platform and build tools"
           sdkmanager --install \
             "ndk;${{ env.NDK_VERSION }}" \
             "platforms;android-${{ env.ANDROID_API_LEVEL }}" \
@@ -382,11 +441,16 @@ jobs:
           NDK_DIR="${SDK}/ndk/${{ env.NDK_VERSION }}"
           if [ ! -d "$NDK_DIR" ]; then
             echo "::error::NDK not found at $NDK_DIR"
+            echo "### Available NDK versions:"
+            ls "${SDK}/ndk" || true
             exit 1
           fi
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
           echo "### NDK: $NDK_DIR"
+
+          echo "### Platform: ${SDK}/platforms/android-${{ env.ANDROID_API_LEVEL }}"
+          ls "${SDK}/platforms" || true
 
       - name: Configure
         run: |
