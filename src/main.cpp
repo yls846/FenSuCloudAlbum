@@ -18,6 +18,12 @@
 #include <QStandardPaths>
 #include <QDirIterator>
 #include <QDebug>
+// Used directly in this file: Qt::QueuedConnection, QObject::connect and the
+// QObject* parameter of the lambda. QGuiApplication happens to pull them in
+// today, but relying on that is fragile.
+#include <QtGlobal>
+#include <QObject>
+#include <Qt>
 
 #include "app/AppController.h"
 #include "platform/android/AndroidPlatform.h"

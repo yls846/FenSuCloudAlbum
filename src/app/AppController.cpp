@@ -26,6 +26,34 @@ AppController::~AppController()
     // is closed cleanly, which DatabaseManager does in its destructor.
 }
 
+// ---------------------------------------------------------------------------
+// QML facing model accessors
+// ---------------------------------------------------------------------------
+// These live here rather than in the header because AppController.h only
+// forward declares the model classes. Converting a MediaModel* to a QObject*
+// requires the compiler to know that MediaModel derives from QObject, and a
+// forward declaration does not say that. All four models are fully included
+// at the top of this file.
+QObject *AppController::albums() const
+{
+    return m_albumModel;
+}
+
+QObject *AppController::mediaModel() const
+{
+    return m_mediaModel;
+}
+
+QObject *AppController::timelineModel() const
+{
+    return m_timelineModel;
+}
+
+QObject *AppController::memoryModel() const
+{
+    return m_memoryModel;
+}
+
 QString AppController::platformName() const
 {
 #if defined(FSCA_PLATFORM_ANDROID)

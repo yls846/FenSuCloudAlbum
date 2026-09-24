@@ -68,11 +68,18 @@ public:
     bool isOnline() const { return m_online; }
     QString platformName() const;
 
-    // QML facing model accessors (QObject* so QML sees the derived model type).
-    QObject *albums() const { return m_albumModel; }
-    QObject *mediaModel() const { return m_mediaModel; }
-    QObject *timelineModel() const { return m_timelineModel; }
-    QObject *memoryModel() const { return m_memoryModel; }
+    // QML facing model accessors.
+    //
+    // The return type is QObject* so QML can read the properties the models
+    // expose (count, for example) without Qt having to know the concrete type.
+    // The bodies live in the .cpp: this header only forward declares the model
+    // classes, and a forward declaration is not enough to convert a
+    // MediaModel* (or any of the others) to a QObject*, because at this point
+    // the compiler does not yet know they derive from QObject.
+    QObject *albums() const;
+    QObject *mediaModel() const;
+    QObject *timelineModel() const;
+    QObject *memoryModel() const;
 
     // Core service accessors. They return nullptr before initialize().
     DatabaseManager *database() const { return m_database.get(); }
