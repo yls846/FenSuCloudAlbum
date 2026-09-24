@@ -104,38 +104,26 @@ jobs:
           fi
           echo "Singleton registration is present."
 
-      - name: Verify the QML module root is declared
-        run: |
-          set -euo pipefail
-          # Qt 6.5+ cannot deduce the module root when QML_FILES live in
-          # several sub directories. Without QT_QML_SOURCE_DIRECTORY the
-          # configure step fails.
-          if ! grep -q 'QT_QML_SOURCE_DIRECTORY' CMakeLists.txt; then
-            echo "::error::CMakeLists.txt is missing QT_QML_SOURCE_DIRECTORY"
-            exit 1
-          fi
-          echo "QML module root is declared."
-
-      - name: Verify main.cpp loads a path the module actually exports
+      - name: Verify QML source paths are consistent
         run: |
           set -euo pipefail
 
-          # The real load call, not an example in a comment.
-          LOADED=$(grep -oE 'QUrl\s+url\(QStringLiteral\("(qrc:/qt/qml/[^"]+)"' src/main.cpp \
-                   | grep -oE 'qrc:/qt/qml/[^"]+')
-          if [ -z "$LOADED" ]; then
-            echo "::error::Could not find the QUrl the engine loads in src/main.cpp"
+          # Read the qt_add_qml_module call only, so a word in a comment can
+          # never be mistaken for a keyword argument. The start line must begin
+          # with the command name at column 0, which excludes the explanatory
+          # comments that also contain the text "qt_add_qml_module(".
+          MODULE_CALL=$(awk '/^qt_add_qml_module\(/{f=1} f{print} f&&/^\)/{exit}' CMakeLists.txt)
+
+          if [ -z "$MODULE_CALL" ]; then
+            echo "::error::Could not locate the qt_add_qml_module() call in CMakeLists.txt"
             exit 1
           fi
-
-          # Read the values out of the qt_add_qml_module call only, so a word
-          # in a comment can never be mistaken for a keyword argument.
-          MODULE_CALL=$(sed -n '/qt_add_qml_module(/,/^)/p' CMakeLists.txt)
+          echo "### qt_add_qml_module call"
+          printf '%s\n' "$MODULE_CALL"
 
           URI=$(printf '%s\n' "$MODULE_CALL" \
                 | grep -oE '^[[:space:]]*URI[[:space:]]+[A-Za-z0-9_]+' \
                 | head -1 | awk '{print $2}')
-          # RESOURCE_PREFIX is optional; Qt defaults to /qt/qml.
           PREFIX=$(printf '%s\n' "$MODULE_CALL" \
                 | grep -oE '^[[:space:]]*RESOURCE_PREFIX[[:space:]]+[^[:space:]]+' \
                 | head -1 | awk '{print $2}')
@@ -145,44 +133,72 @@ jobs:
             echo "::error::Could not read the QML module URI from CMakeLists.txt"
             exit 1
           fi
-
-          EXPECTED="qrc:${PREFIX}/${URI}/"
           echo "URI            : $URI"
           echo "RESOURCE_PREFIX: $PREFIX"
-          echo "main.cpp loads : $LOADED"
-          echo "expected prefix: $EXPECTED"
 
-          case "$LOADED" in
-            "${EXPECTED}"*)
-              echo "OK: the loaded URL is inside the exported module."
-              ;;
-            *)
-              echo "::error::main.cpp loads $LOADED which is outside ${EXPECTED}"
-              exit 1
-              ;;
-          esac
-
-          # Resolve QT_QML_SOURCE_DIRECTORY, which is written as
-          #   "${FSCA_QML_DIR}"  with  set(FSCA_QML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml")
-          QMLDIR_RAW=$(grep -oE 'QT_QML_SOURCE_DIRECTORY[[:space:]]+"[^"]+"' CMakeLists.txt \
-                       | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          VAR=$(printf '%s' "$QMLDIR_RAW" | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | head -1)
-          if [ -n "$VAR" ] && [ "$VAR" != "$QMLDIR_RAW" ]; then
-            RESOLVED=$(grep -oE "set\($VAR[[:space:]]+\"[^\"]+\"" CMakeLists.txt \
-                       | sed 's/.*"\(.*\)".*/\1/' \
-                       | sed 's|\${CMAKE_CURRENT_SOURCE_DIR}|.|g')
-            QMLDIR=${RESOLVED:-$QMLDIR_RAW}
-          else
-            QMLDIR=$QMLDIR_RAW
-          fi
-          echo "QT_QML_SOURCE_DIRECTORY resolves to: $QMLDIR"
-
-          REL=${LOADED#"$EXPECTED"}
-          if [ ! -f "${QMLDIR}/${REL}" ]; then
-            echo "::error::${QMLDIR}/${REL} does not exist"
+          # There is no QT_QML_SOURCE_DIRECTORY argument in qt_add_qml_module().
+          # Passing one makes configure fail with "Unknown/unexpected
+          # arguments", so guard against it being reintroduced. Only the
+          # argument block is inspected: the comments above explain that the
+          # argument does not exist and mention it by name.
+          if printf '%s\n' "$MODULE_CALL" | grep -q 'QT_QML_SOURCE_DIRECTORY'; then
+            echo "::error::QT_QML_SOURCE_DIRECTORY is not a valid argument of qt_add_qml_module()"
+            printf '%s\n' "$MODULE_CALL" | grep -n 'QT_QML_SOURCE_DIRECTORY' || true
             exit 1
           fi
-          echo "OK: ${QMLDIR}/${REL} exists."
+          echo "OK: no invalid qt_add_qml_module arguments."
+
+          # Collect the QML_FILES entries.
+          QML_FILES=$(printf '%s\n' "$MODULE_CALL" \
+                      | sed -n '/QML_FILES/,$p' \
+                      | grep -oE '[A-Za-z0-9_/]+\.qml' | sort -u)
+          if [ -z "$QML_FILES" ]; then
+            echo "::error::No QML_FILES found in qt_add_qml_module()"
+            exit 1
+          fi
+
+          echo
+          echo "### QML_FILES entries and the resource path each one produces"
+          EXPECTED_PREFIX="qrc:${PREFIX}/${URI}/"
+          fail=0
+          while read -r f; do
+            [ -z "$f" ] && continue
+            if [ -f "$f" ]; then
+              echo "  OK   ${EXPECTED_PREFIX}${f}   <- ${f}"
+            else
+              echo "::error file=$f::$f is listed in QML_FILES but does not exist"
+              fail=1
+            fi
+          done <<< "$QML_FILES"
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+          # The URL main.cpp loads must be one of those exact resource paths.
+          LOADED=$(grep -oE 'QUrl\s+url\(QStringLiteral\("(qrc:/qt/qml/[^"]+)"' src/main.cpp \
+                   | grep -oE 'qrc:/qt/qml/[^"]+')
+          if [ -z "$LOADED" ]; then
+            echo "::error::Could not find the QUrl the engine loads in src/main.cpp"
+            exit 1
+          fi
+          echo
+          echo "main.cpp loads: $LOADED"
+
+          # Strip the module prefix to get the path as it appears in QML_FILES.
+          REL=${LOADED#"qrc:${PREFIX}/${URI}/"}
+          if [ "$REL" = "$LOADED" ]; then
+            echo "::error::main.cpp loads $LOADED which is outside ${EXPECTED_PREFIX}"
+            exit 1
+          fi
+          if ! printf '%s\n' "$QML_FILES" | grep -qxF "$REL"; then
+            echo "::error::main.cpp loads $LOADED but '${REL}' is not in QML_FILES"
+            echo "### QML_FILES was:"
+            printf '   %s\n' $QML_FILES
+            exit 1
+          fi
+          echo "OK: $REL is listed in QML_FILES and exists."
+          echo "OK: expected resource path is ${EXPECTED_PREFIX}${REL}"
 
       - name: Verify every QML file using Theme imports the module
         run: |
@@ -551,6 +567,74 @@ jobs:
         run: |
           set -euo pipefail
           cmake --build build-android --parallel "$(nproc)" 2>&1 | tail -150
+
+      - name: Verify the QML resource paths the build actually produced
+        run: |
+          set -euo pipefail
+
+          # The generated .qrc files are the ground truth for where the QML
+          # files ended up. Read them instead of guessing at the mapping.
+          echo "### Generated .qrc files"
+          find build-android -name '*.qrc' -print || true
+          echo
+
+          QRC=$(find build-android -name '*.qrc' -print -quit || true)
+          if [ -z "$QRC" ]; then
+            echo "::error::No .qrc file was generated."
+            echo "### build tree (2 levels):"
+            find build-android -maxdepth 2 -type d | head -40 || true
+            exit 1
+          fi
+
+          echo "### QML entries inside $QRC"
+          # qrc entries look like  <file alias="qt/qml/...">path</file>
+          grep -oE '<file[^>]*>[^<]*</file>' "$QRC" | sed 's|<file |  |; s|</file>||' || true
+          echo
+
+          echo "### Resource paths (alias attribute)"
+          ALIASES=$(grep -oE 'alias="[^"]*\.qml"' "$QRC" | sed 's/alias="//; s/"$//' | sort -u)
+          if [ -n "$ALIASES" ]; then
+            printf '  :/%s\n' $ALIASES
+          else
+            echo "  (no alias attributes, the file paths are the resource paths)"
+          fi
+          echo
+
+          # main.cpp asks for a specific URL. It must exist in the resource
+          # tree, otherwise the engine creates no root object at runtime.
+          LOADED=$(grep -oE 'QUrl\s+url\(QStringLiteral\("(qrc:/[^"]+)"' src/main.cpp \
+                   | grep -oE 'qrc:/[^"]+')
+          echo "### main.cpp loads: $LOADED"
+
+          RES=`printf '%s' "$LOADED" | sed 's|^qrc:/|:/|'`
+          echo "### Resource name expected: $RES"
+
+          if grep -qE "alias=\"${RES#:/}\"|>${RES}</file>|alias=\"[^\"]*${RES##*/}\"" "$QRC"; then
+            echo "OK: the loaded resource is present in the generated .qrc"
+          else
+            echo "::warning::The loaded resource was not matched in the .qrc by a simple pattern."
+            echo "::warning::Compare the lists above with $LOADED."
+            echo "### Full qrc contents:"
+            head -60 "$QRC"
+          fi
+
+          # Independently confirm every QML file from the source tree shows up.
+          echo
+          echo "### Cross check: source QML files vs qrc entries"
+          fail=0
+          for f in $(find src/ui/qml -name '*.qml' | sort); do
+            base=$(basename "$f")
+            if grep -qF "$base" "$QRC"; then
+              echo "  present  $f"
+            else
+              echo "::error file=$f::$base is not present in the generated .qrc"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All QML sources are embedded in the resource system."
 
       - name: Locate APK
         id: apk

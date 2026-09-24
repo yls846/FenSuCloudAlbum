@@ -99,29 +99,37 @@ qt_add_executable(FenSuCloudAlbum
 # ---------------------------------------------------------------------------
 # QML module
 # ---------------------------------------------------------------------------
-# The QML sources live under src/ui/qml/ in several sub directories
-# (theme/, components/, pages/). Two properties make the generated qmldir and
-# the resource layout match what main.cpp loads:
+# The QML sources live under src/ui/qml/ in several sub directories:
+# theme/, components/ and pages/.
 #
-#   QT_QML_SOURCE_DIRECTORY  tells Qt which directory is the module root, so
-#                            the files are registered as  Main.qml,
-#                            components/PhotoGrid.qml, ... rather than as
-#                            src/ui/qml/components/PhotoGrid.qml.
+# How the paths below end up in the resource system
+# ------------------------------------------------
+# qt_add_qml_module() maps every QML_FILES entry to
+#     <RESOURCE_PREFIX>/<URI with dots as slashes>/<path as written>
+# where the path is recorded relative to the directory CMakeLists.txt lives in
+# (CMAKE_CURRENT_SOURCE_DIR). The files are therefore written here exactly as
+# they appear in the repository and main.cpp loads exactly the same relative
+# path:
 #
-#   RESOURCE_PREFIX          keeps the well known  /qt/qml  prefix, so the
-#                            module ends up at
-#                            qrc:/qt/qml/FenSuCloudAlbum/  which is exactly
-#                            the URL main.cpp requests for Main.qml.
+#     QML_FILES "src/ui/qml/Main.qml"
+#  -> qrc:/qt/qml/FenSuCloudAlbum/src/ui/qml/Main.qml
 #
-# Without QT_QML_SOURCE_DIRECTORY, Qt 6.5+ cannot deduce the module root from
-# multi directory QML_FILES lists and configuration fails.
+# RESOURCE_PREFIX is stated explicitly rather than relying on the default.
+# Qt 6.5 introduced QTP0001, which already defaults it to /qt/qml, but Qt 6.5
+# and later emit a configure warning when neither RESOURCE_PREFIX nor
+# NO_RESOURCE_TARGET_PATH is given. Being explicit silences that and documents
+# the intent.
 #
-set(FSCA_QML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/qml")
+# Note: there is no QT_QML_SOURCE_DIRECTORY argument. It does not exist in
+# qt_add_qml_module() and passing it makes configure fail with
+# "Unknown/unexpected arguments". The module root cannot be relocated; the
+# directory layout of QML_FILES is what determines the resource paths.
+#
 
 # Theme.qml is declared `pragma Singleton`. Without this property the
 # generated qmldir has no singleton entry and every `Theme.xxx` reference in
 # QML fails to resolve at runtime.
-set_source_files_properties("${FSCA_QML_DIR}/theme/Theme.qml"
+set_source_files_properties(src/ui/qml/theme/Theme.qml
     PROPERTIES QT_QML_SINGLETON_TYPE TRUE
 )
 
@@ -129,17 +137,16 @@ qt_add_qml_module(FenSuCloudAlbum
     URI FenSuCloudAlbum
     VERSION 1.0
     RESOURCE_PREFIX /qt/qml
-    QT_QML_SOURCE_DIRECTORY "${FSCA_QML_DIR}"
     QML_FILES
-        "${FSCA_QML_DIR}/Main.qml"
-        "${FSCA_QML_DIR}/theme/Theme.qml"
-        "${FSCA_QML_DIR}/components/BottomNavBar.qml"
-        "${FSCA_QML_DIR}/components/PhotoGrid.qml"
-        "${FSCA_QML_DIR}/components/AlbumCard.qml"
-        "${FSCA_QML_DIR}/components/SectionHeader.qml"
-        "${FSCA_QML_DIR}/pages/AlbumsPage.qml"
-        "${FSCA_QML_DIR}/pages/AllPhotosPage.qml"
-        "${FSCA_QML_DIR}/pages/MemoriesPage.qml"
+        src/ui/qml/Main.qml
+        src/ui/qml/theme/Theme.qml
+        src/ui/qml/components/BottomNavBar.qml
+        src/ui/qml/components/PhotoGrid.qml
+        src/ui/qml/components/AlbumCard.qml
+        src/ui/qml/components/SectionHeader.qml
+        src/ui/qml/pages/AlbumsPage.qml
+        src/ui/qml/pages/AllPhotosPage.qml
+        src/ui/qml/pages/MemoriesPage.qml
 )
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@
 #include <QIcon>
 #include <QFont>
 #include <QStandardPaths>
+#include <QDirIterator>
 #include <QDebug>
 
 #include "app/AppController.h"
@@ -50,23 +51,34 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("App"), &controller);
 
     // The QML module is registered with
-    //   URI               FenSuCloudAlbum
-    //   RESOURCE_PREFIX   /qt/qml
-    //   QT_QML_SOURCE_DIRECTORY  src/ui/qml
-    // so Main.qml (the module root file) is reachable at exactly this URL.
-    // Anything below src/ui/qml/ keeps its relative path, e.g.
-    // qrc:/qt/qml/FenSuCloudAlbum/pages/AlbumsPage.qml
-    const QUrl url(QStringLiteral("qrc:/qt/qml/FenSuCloudAlbum/Main.qml"));
+    //   URI              FenSuCloudAlbum
+    //   RESOURCE_PREFIX  /qt/qml
+    //   QML_FILES        src/ui/qml/Main.qml   (path as written in CMakeLists)
+    // which places the file at exactly this URL.
+    //
+    // The path inside the module is whatever was written in QML_FILES, so the
+    // repository relative path is part of the URL. If this URL is ever wrong
+    // the engine fails to create a root object and the list of resource paths
+    // that do exist is printed below.
+    const QUrl url(QStringLiteral("qrc:/qt/qml/FenSuCloudAlbum/src/ui/qml/Main.qml"));
 
+    // Fail with a useful message instead of a silent black screen.
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreated,
         &app,
         [url](QObject *obj, const QUrl &objUrl) {
-            if (!obj && url == objUrl) {
-                qCritical() << "Failed to load root QML component:" << objUrl;
-                QCoreApplication::exit(-1);
-            }
+            if (obj || url != objUrl)
+                return;
+            qCritical() << "Failed to load root QML component:" << objUrl;
+            qCritical() << "QML files present in the resource system:";
+            QDirIterator it(QStringLiteral(":/qt/qml"),
+                            QStringList() << QStringLiteral("*.qml"),
+                            QDir::Files,
+                            QDirIterator::Subdirectories);
+            while (it.hasNext())
+                qCritical() << "   " << it.next();
+            QCoreApplication::exit(-1);
         },
         Qt::QueuedConnection);
 
