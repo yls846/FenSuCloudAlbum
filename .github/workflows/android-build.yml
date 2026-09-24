@@ -121,12 +121,13 @@ jobs:
           echo "### qt_add_qml_module call"
           printf '%s\n' "$MODULE_CALL"
 
+          # awk both matches and prints, so there is no `grep | head` pipeline to
+          # trip set -o pipefail. The exit after the first hit reproduces the
+          # old `head -1` behaviour.
           URI=$(printf '%s\n' "$MODULE_CALL" \
-                | grep -oE '^[[:space:]]*URI[[:space:]]+[A-Za-z0-9_]+' \
-                | head -1 | awk '{print $2}')
+                | awk '/^[[:space:]]*URI[[:space:]]+[A-Za-z0-9_]+/ {print $2; exit}')
           PREFIX=$(printf '%s\n' "$MODULE_CALL" \
-                | grep -oE '^[[:space:]]*RESOURCE_PREFIX[[:space:]]+[^[:space:]]+' \
-                | head -1 | awk '{print $2}')
+                | awk '/^[[:space:]]*RESOURCE_PREFIX[[:space:]]+/ {print $2; exit}')
           PREFIX=${PREFIX:-/qt/qml}
 
           if [ -z "$URI" ]; then
@@ -369,7 +370,10 @@ jobs:
           echo "QT_HOST_PATH=$HOST_ROOT" >> "$GITHUB_ENV"
 
           echo "### Available Qt modules (cmake packages):"
-          ls "$QT_ROOT/lib/cmake" | head -40
+          # Purely informational. `ls | head` under set -o pipefail returns
+          # non-zero once head has consumed enough lines and the writer gets
+          # SIGPIPE, which would abort a step that has nothing to assert.
+          ls "$QT_ROOT/lib/cmake" | head -40 || true
 
           for mod in Core Gui Qml Quick QuickControls2 Network Sql Svg; do
             if [ -d "$QT_ROOT/lib/cmake/Qt6${mod}" ]; then
@@ -554,14 +558,17 @@ jobs:
           # will fall back to a host build and the compile will use the wrong
           # architecture.
           echo "### Android specific Qt cmake files:"
-          ls "$QT_ROOT_DIR/lib/cmake/Qt6/" | head -40
+          # Informational listings. Each is guarded because `cmd | head` under
+          # set -o pipefail reports the writer's SIGPIPE as a pipeline failure,
+          # which would abort this step for no useful reason.
+          ls "$QT_ROOT_DIR/lib/cmake/Qt6/" | head -40 || true
           echo
           echo "### Qt6Core package dir:"
-          ls "$QT_ROOT_DIR/lib/cmake/Qt6Core/" | head -20
+          ls "$QT_ROOT_DIR/lib/cmake/Qt6Core/" | head -20 || true
           echo
 
           # Prove the library really is an Android arm64 binary.
-          CORE_LIB=$(find "$QT_ROOT_DIR/lib" -maxdepth 1 -name 'libQt6Core*.so*' | head -1)
+          CORE_LIB=$(find "$QT_ROOT_DIR/lib" -maxdepth 1 -name 'libQt6Core*.so*' -print -quit)
           echo "### libQt6Core: $CORE_LIB"
           if [ -n "$CORE_LIB" ]; then
             file "$CORE_LIB" || true
@@ -658,7 +665,9 @@ jobs:
           echo "### Searching for APKs"
           find build-android -name '*.apk' -type f -print || true
 
-          APK=$(find build-android -name '*.apk' -type f | head -n 1)
+          # -print -quit stops find itself after the first match, which avoids
+          # the `find | head` SIGPIPE problem under set -o pipefail.
+          APK=$(find build-android -name '*.apk' -type f -print -quit)
           if [ -z "$APK" ]; then
             echo "::error::The build succeeded but produced no APK."
             find build-android -maxdepth 3 -type d | head -30 || true
@@ -692,12 +701,27 @@ jobs:
           done
 
           echo "### Native libraries"
-          if unzip -l "$APK" | grep -q 'lib/arm64-v8a/'; then
-            unzip -l "$APK" | grep 'lib/arm64-v8a/' | head -20
-          else
+          # `unzip -l ... | grep ... | head` trips pipefail: head exits after
+          # consuming its lines, grep keeps writing, the kernel sends SIGPIPE
+          # and grep returns 129. Under set -o pipefail that becomes the exit
+          # status of the whole pipeline and the step fails even though the
+          # APK is fine. Collect the listing once into a variable and search
+          # that instead of piping through head.
+          LISTING=$(unzip -l "$APK")
+          NATIVE=$(printf '%s\n' "$LISTING" | grep 'lib/arm64-v8a/' || true)
+          if [ -z "$NATIVE" ]; then
             echo "::error::No arm64-v8a native libraries are packaged"
-            unzip -l "$APK" | head -40 || true
-            fail=1
+            printf '%s\n' "$LISTING" | head -40 || true
+            exit 1
+          fi
+          printf '%s\n' "$NATIVE"
+
+          echo "### The application library specifically"
+          if printf '%s\n' "$NATIVE" | grep -q 'libFenSuCloudAlbum_arm64-v8a\.so'; then
+            echo "  OK   libFenSuCloudAlbum_arm64-v8a.so is packaged"
+          else
+            echo "::error::The application library is not in the APK"
+            exit 1
           fi
 
           if [ "$fail" -ne 0 ]; then
