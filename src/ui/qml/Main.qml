@@ -61,6 +61,8 @@ ApplicationWindow {
     // -----------------------------------------------------------------------
     // Content
     // -----------------------------------------------------------------------
+    // The two pages stay alive in a StackLayout so scroll position and model
+    // state survive a tab switch, the way Google Photos behaves.
     StackLayout {
         id: stack
 
@@ -71,26 +73,29 @@ ApplicationWindow {
             bottom: navBar.top
         }
 
-        currentIndex: navBar.currentIndex
+        // One property drives both the layout and the navigation bar. The
+        // navigation bar writes to it through onItemSelected below and the
+        // layout reads it. Previously Main.qml set currentIndex to the literal
+        // 0 on the bar and never handled itemSelected, so the bar's own
+        // currentIndex was reset to 0 on every change and tapping a tab did
+        // nothing at all.
+        property int activeTab: 0
+
+        currentIndex: activeTab
+        onCurrentIndexChanged: activeTab = currentIndex
 
         AlbumsPage {
             onAlbumActivated: function (relativePath, albumName) {
-                // v0.1 has no album detail screen yet. The hook exists so the
-                // navigation model (relativePath preserved, never flattened)
-                // is already correct when the sub folder view lands.
-                console.log("Open album:", albumName, "at", relativePath);
+                // The D version has no album detail screen yet. The hook exists
+                // so the navigation model is already correct when that screen
+                // lands: relativePath is carried through, never flattened.
+                console.log("Open album:", albumName, "at", relativePath)
             }
         }
 
         AllPhotosPage {
             onItemActivated: function (mediaIndex) {
-                console.log("Open media index:", mediaIndex);
-            }
-        }
-
-        MemoriesPage {
-            onMemoryActivated: function (memoryIndex) {
-                console.log("Open memory index:", memoryIndex);
+                console.log("Open media index:", mediaIndex)
             }
         }
     }
@@ -107,7 +112,14 @@ ApplicationWindow {
             bottom: parent.bottom
         }
 
-        currentIndex: 0
+        // Two way link with the layout. onItemSelected is what was missing
+        // before: the bar emitted the signal and Main.qml ignored it, so the
+        // index never moved. currentIndex bound to the layout property keeps
+        // the highlighted tab in step even if the layout is changed in code.
+        currentIndex: stack.activeTab
+        onItemSelected: function (index) {
+            stack.activeTab = index
+        }
     }
 
     // -----------------------------------------------------------------------

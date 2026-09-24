@@ -23,6 +23,11 @@
 #include <QDir>
 // QCoreApplication::exit() is used below. QGuiApplication derives from it.
 #include <QCoreApplication>
+// Translation loading: QTranslator, and QFile::exists() to test each candidate
+// before letting QTranslator report the failure itself.
+#include <QTranslator>
+#include <QFile>
+#include <QLocale>
 #include <QDebug>
 // Used directly in this file: Qt::QueuedConnection, QObject::connect and the
 // QObject* parameter of the lambda. QGuiApplication happens to pull them in
@@ -55,6 +60,60 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("FenSu Cloud Album"));
     app.setOrganizationName(QStringLiteral("FenSu"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
+
+    // -----------------------------------------------------------------------
+    // Translations
+    // -----------------------------------------------------------------------
+    // The .qm file is embedded in the resource system by qt_add_translations
+    // under the /i18n prefix. Nothing is translatable until a QTranslator is
+    // installed on the application, which must happen before the QML engine
+    // loads anything: qsTr() is evaluated once, at component creation, so a
+    // translator installed afterwards has no effect on text already shown.
+    //
+    // The translator is kept alive for the lifetime of main(); a QTranslator
+    // that goes out of scope is removed from the application and its
+    // translations stop applying.
+    QTranslator translator;
+
+    const QStringList translationCandidates = {
+        QStringLiteral(":/i18n/fensucloudalbum_zh_CN.qm"),
+        QStringLiteral(":/i18n/FenSuCloudAlbum_zh_CN.qm"),
+        QStringLiteral(":/i18n/fensucloudalbum_zh.qm"),
+    };
+
+    bool translatorLoaded = false;
+    for (const QString &candidate : translationCandidates) {
+        if (QFile::exists(candidate) && translator.load(candidate)) {
+            translatorLoaded = app.installTranslator(&translator);
+            qInfo() << "FenSuCloudAlbum: loaded translation" << candidate
+                    << "installed=" << translatorLoaded;
+            break;
+        }
+    }
+
+    if (!translatorLoaded) {
+        // Not fatal: the UI falls back to the English source strings. The
+        // message says what was tried so a packaging problem is visible in
+        // logcat rather than being mistaken for a missing translation.
+        qWarning() << "FenSuCloudAlbum: no translation loaded, UI will be English."
+                   << "Candidates tried:" << translationCandidates;
+
+        // List what i18n resources actually exist, if any, to make the fix
+        // obvious from the log alone.
+        QDirIterator it(QStringLiteral(":/i18n"),
+                        QStringList() << QStringLiteral("*.qm"),
+                        QDir::Files,
+                        QDirIterator::Subdirectories);
+        int found = 0;
+        while (it.hasNext()) {
+            qWarning() << "FenSuCloudAlbum:     present:" << it.next();
+            ++found;
+        }
+        qWarning() << "FenSuCloudAlbum: total .qm files in :/i18n =" << found;
+    }
+
+    qInfo() << "FenSuCloudAlbum: application locale ="
+            << QLocale::system().name();
 
     qInfo() << "FenSuCloudAlbum: application object created"
             << "name=" << app.applicationName()

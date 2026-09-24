@@ -13,10 +13,14 @@ Item {
     id: root
 
     property int currentIndex: 0
+
+    // Two destinations. The Memories tab was removed from the D version: the
+    // feature is not part of this release, so there is no reason to show an
+    // entry that leads nowhere. The page and its model stay in the tree for a
+    // later release.
     property var items: [
         { label: qsTr("Albums"),   icon: "\u25A6" }, // ▦
-        { label: qsTr("All"),      icon: "\u25A3" }, // ▣
-        { label: qsTr("Memories"), icon: "\u25CE" }  // ◎
+        { label: qsTr("All"),      icon: "\u25A3" }  // ▣
     ]
 
     signal itemSelected(int index)

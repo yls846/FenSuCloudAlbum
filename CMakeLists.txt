@@ -35,9 +35,29 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
     Network
     Sql
     Svg
+    # LinguistTools provides lrelease, which turns the .ts file in
+    # translations/ into the .qm file the application loads at run time.
+    LinguistTools
 )
 
 qt_standard_project_setup(REQUIRES 6.5)
+
+# ---------------------------------------------------------------------------
+# Translations
+# ---------------------------------------------------------------------------
+# Declared here, before the target exists, so qt_standard_project_setup can
+# pick the language up and so the .ts path is known to any target defined
+# later. The translations/ directory is maintained by hand; lupdate is not run
+# as part of the build, only lrelease, because the .ts file is the source of
+# truth for this project and running lupdate would rewrite it.
+set(TS_FILES "${CMAKE_CURRENT_SOURCE_DIR}/translations/fensucloudalbum_zh_CN.ts")
+
+if(EXISTS "${TS_FILES}")
+    set_source_files_properties("${TS_FILES}"
+        PROPERTIES OUTPUT_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/translations")
+else()
+    message(WARNING "Translation file missing: ${TS_FILES}")
+endif()
 
 # ---------------------------------------------------------------------------
 # Qt policies
@@ -157,8 +177,31 @@ qt_add_qml_module(FenSuCloudAlbum
         src/ui/qml/components/SectionHeader.qml
         src/ui/qml/pages/AlbumsPage.qml
         src/ui/qml/pages/AllPhotosPage.qml
-        src/ui/qml/pages/MemoriesPage.qml
+        # MemoriesPage.qml is intentionally not listed. The Memories tab was
+        # removed from the D version, so the page would be compiled into the
+        # resource system with nothing able to reach it. The file stays in the
+        # tree, along with MemoryModel, for a later release.
 )
+
+# ---------------------------------------------------------------------------
+# Translations
+# ---------------------------------------------------------------------------
+# Produces fensucloudalbum_zh_CN.qm from the .ts file and embeds it in the
+# resource system under /i18n, so main.cpp can install it with
+#     translator.load(":/i18n/fensucloudalbum_zh_CN.qm")
+# The exact resource name is logged at startup, see main.cpp.
+#
+# SOURCE_TARGETS is given so lupdate has something to scan. lrelease is the
+# step that actually runs during a normal build. The upstream .ts file is
+# maintained by hand in this project, so re-running lupdate would rewrite it;
+# the update_translations target exists but is not part of the default build.
+if(EXISTS "${TS_FILES}")
+    qt_add_translations(FenSuCloudAlbum
+        TS_FILES "${TS_FILES}"
+        SOURCE_TARGETS FenSuCloudAlbum
+        RESOURCE_PREFIX "/i18n"
+    )
+endif()
 
 # ---------------------------------------------------------------------------
 # Linking

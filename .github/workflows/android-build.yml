@@ -137,20 +137,24 @@ jobs:
           echo "URI            : $URI"
           echo "RESOURCE_PREFIX: $PREFIX"
 
-          # There is no QT_QML_SOURCE_DIRECTORY argument in qt_add_qml_module().
-          # Passing one makes configure fail with "Unknown/unexpected
-          # arguments", so guard against it being reintroduced. Only the
-          # argument block is inspected: the comments above explain that the
-          # argument does not exist and mention it by name.
-          if printf '%s\n' "$MODULE_CALL" | grep -q 'QT_QML_SOURCE_DIRECTORY'; then
+          # Arguments are checked against the executable lines only.
+          # Twice now a guard has failed because the comment explaining the
+          # rule contained the very text being searched for, so the block is
+          # reduced to comment-free text once here and every check below uses
+          # that. This also guards against QT_QML_SOURCE_DIRECTORY, which is
+          # not a real argument and makes configure fail with
+          # "Unknown/unexpected arguments".
+          MODULE_CODE=$(printf '%s\n' "$MODULE_CALL" | sed 's|#.*||')
+
+          if printf '%s\n' "$MODULE_CODE" | grep -q 'QT_QML_SOURCE_DIRECTORY'; then
             echo "::error::QT_QML_SOURCE_DIRECTORY is not a valid argument of qt_add_qml_module()"
-            printf '%s\n' "$MODULE_CALL" | grep -n 'QT_QML_SOURCE_DIRECTORY' || true
+            printf '%s\n' "$MODULE_CODE" | grep -n 'QT_QML_SOURCE_DIRECTORY' || true
             exit 1
           fi
           echo "OK: no invalid qt_add_qml_module arguments."
 
-          # Collect the QML_FILES entries.
-          QML_FILES=$(printf '%s\n' "$MODULE_CALL" \
+          # Collect the QML_FILES entries from the comment-free text.
+          QML_FILES=$(printf '%s\n' "$MODULE_CODE" \
                       | sed -n '/QML_FILES/,$p' \
                       | grep -oE '[A-Za-z0-9_/]+\.qml' | sort -u)
           if [ -z "$QML_FILES" ]; then
