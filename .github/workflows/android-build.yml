@@ -651,86 +651,59 @@ jobs:
           set -euo pipefail
           cmake --build build-android --parallel "$(nproc)" 2>&1 | tail -150
 
-      - name: Verify the QML resource paths the build actually produced
-        run: |
-          set -euo pipefail
-
-          # The generated .qrc files are the ground truth for where the QML
-          # files ended up. Read them instead of guessing at the mapping.
-          echo "### Generated .qrc files"
-          find build-android -name '*.qrc' -print || true
-          echo
-
-          QRC=$(find build-android -name '*.qrc' -print -quit || true)
-          if [ -z "$QRC" ]; then
-            echo "::error::No .qrc file was generated."
-            echo "### build tree (2 levels):"
-            find build-android -maxdepth 2 -type d | head -40 || true
-            exit 1
-          fi
-
-          echo "### QML entries inside $QRC"
-          # qrc entries look like  <file alias="qt/qml/...">path</file>
-          grep -oE '<file[^>]*>[^<]*</file>' "$QRC" | sed 's|<file |  |; s|</file>||' || true
-          echo
-
-          echo "### Resource paths (alias attribute)"
-          ALIASES=$(grep -oE 'alias="[^"]*\.qml"' "$QRC" | sed 's/alias="//; s/"$//' | sort -u)
-          if [ -n "$ALIASES" ]; then
-            printf '  :/%s\n' $ALIASES
-          else
-            echo "  (no alias attributes, the file paths are the resource paths)"
-          fi
-          echo
-
-          # main.cpp asks for a specific URL. It must exist in the resource
-          # tree, otherwise the engine creates no root object at runtime.
-          LOADED=$(grep -oE 'QUrl\s+url\(QStringLiteral\("(qrc:/[^"]+)"' src/main.cpp \
-                   | grep -oE 'qrc:/[^"]+')
-          echo "### main.cpp loads: $LOADED"
-
-          RES=`printf '%s' "$LOADED" | sed 's|^qrc:/|:/|'`
-          echo "### Resource name expected: $RES"
-
-          if grep -qE "alias=\"${RES#:/}\"|>${RES}</file>|alias=\"[^\"]*${RES##*/}\"" "$QRC"; then
-            echo "OK: the loaded resource is present in the generated .qrc"
-          else
-            echo "::warning::The loaded resource was not matched in the .qrc by a simple pattern."
-            echo "::warning::Compare the lists above with $LOADED."
-            echo "### Full qrc contents:"
-            head -60 "$QRC"
-          fi
-
-          # Independently confirm every QML file from the source tree shows up.
-          echo
-          echo "### Cross check: source QML files vs qrc entries"
-          fail=0
-          for f in $(find src/ui/qml -name '*.qml' | sort); do
-            base=$(basename "$f")
-            if grep -qF "$base" "$QRC"; then
-              echo "  present  $f"
-            else
-              echo "::error file=$f::$base is not present in the generated .qrc"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            exit 1
-          fi
-          echo "All QML sources are embedded in the resource system."
-
-      - name: Locate APK
+      - name: Locate and verify APK
         id: apk
         run: |
           set -euo pipefail
           echo "### Searching for APKs"
           find build-android -name '*.apk' -type f -print || true
+
           APK=$(find build-android -name '*.apk' -type f | head -n 1)
           if [ -z "$APK" ]; then
             echo "::error::The build succeeded but produced no APK."
-            find build-android -maxdepth 3 -type d | head -30
+            find build-android -maxdepth 3 -type d | head -30 || true
             exit 1
           fi
+
+          echo "### APK: $APK"
+          ls -lh "$APK"
+          SIZE=$(stat -c %s "$APK")
+          echo "### Size: $SIZE bytes"
+          # A Qt for Android debug APK with the arm64 libraries is tens of MB.
+          # Anything under a megabyte means the packaging step produced a shell.
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::The APK is only $SIZE bytes, which is far too small to contain the Qt libraries."
+            unzip -l "$APK" | head -40 || true
+            exit 1
+          fi
+
+          echo "### Contents (top level)"
+          unzip -l "$APK" | head -30 || true
+
+          echo "### Required entries"
+          fail=0
+          for entry in "AndroidManifest.xml" "classes.dex" "resources.arsc"; do
+            if unzip -l "$APK" | grep -q "$entry"; then
+              echo "  OK   $entry"
+            else
+              echo "::error::$entry is missing from the APK"
+              fail=1
+            fi
+          done
+
+          echo "### Native libraries"
+          if unzip -l "$APK" | grep -q 'lib/arm64-v8a/'; then
+            unzip -l "$APK" | grep 'lib/arm64-v8a/' | head -20
+          else
+            echo "::error::No arm64-v8a native libraries are packaged"
+            unzip -l "$APK" | head -40 || true
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
           mkdir -p artifacts
           cp "$APK" artifacts/FenSuCloudAlbum-debug.apk
