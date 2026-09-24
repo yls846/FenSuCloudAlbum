@@ -36,7 +36,9 @@ env:
   # NDK 25.2 is what Qt 6.7 was built and tested against. 26.x changes some
   # linker defaults that this project does not need.
   NDK_VERSION: "25.2.9519653"
-  QT_INSTALL_DIR: "${{ github.workspace }}/Qt"
+  # Install Qt outside the checkout so the working tree stays clean and the
+  # ~4 GB of Qt does not end up inside the repository directory.
+  QT_INSTALL_DIR: "/opt/Qt"
 
 jobs:
   # =========================================================================
@@ -232,6 +234,22 @@ jobs:
           echo "ninja: $(ninja --version)"
           echo "cmake: $(cmake --version | head -1)"
 
+      - name: Prepare Qt install directory
+        run: |
+          set -euo pipefail
+          # /opt is owned by root on the runner and actions/cache needs to be
+          # able to write there, so take ownership before the cache step.
+          sudo mkdir -p "${QT_INSTALL_DIR}"
+          sudo chown -R "$(id -u):$(id -g)" "${QT_INSTALL_DIR}"
+          echo "### ${QT_INSTALL_DIR} is writable: $(test -w "${QT_INSTALL_DIR}" && echo yes || echo no)"
+
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.QT_INSTALL_DIR }}
+          key: qt-${{ env.QT_VERSION }}-android-arm64-desktop-gcc64-v1
+
       - name: Install aqtinstall
         run: |
           set -euo pipefail
@@ -239,34 +257,110 @@ jobs:
           python3 -m pip install "aqtinstall==3.1.18"
           aqt version
 
-      - name: Install Qt ${{ env.QT_VERSION }} for Android
+      - name: Install Qt ${{ env.QT_VERSION }}
         run: |
           set -euo pipefail
           mkdir -p "${QT_INSTALL_DIR}"
-          aqt install-qt linux android ${{ env.QT_VERSION }} android_arm64_v8a \
-            --outputdir "${QT_INSTALL_DIR}" \
-            --archives qtbase qtdeclarative qtsvg qtnetworkauth icu 2>&1 | tail -30
+
+          ANDROID_DIR="${QT_INSTALL_DIR}/${{ env.QT_VERSION }}/android_arm64_v8a"
+          HOST_DIR="${QT_INSTALL_DIR}/${{ env.QT_VERSION }}/gcc_64"
+
+          # Android target Qt. Installed without an --archives filter so the
+          # package is complete: a trimmed install is what makes cmake modules
+          # go missing.
+          if [ -f "$ANDROID_DIR/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "### Android Qt already present, skipping download"
+          else
+            echo "### Installing Qt for Android (arm64-v8a)"
+            aqt install-qt linux android ${{ env.QT_VERSION }} android_arm64_v8a \
+              --outputdir "${QT_INSTALL_DIR}" 2>&1 | tail -15
+          fi
+
+          # Host Qt. Cross compiling Qt for Android needs a host build of the
+          # same version: qt_add_qml_module runs the host qmlcachegen and
+          # qmltyperegistrar. Pointing QT_HOST_PATH at the Android build (as
+          # an earlier revision did) fails.
+          if [ -f "$HOST_DIR/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "### Host Qt already present, skipping download"
+          else
+            echo "### Installing Qt for the host (linux gcc_64)"
+            aqt install-qt linux desktop ${{ env.QT_VERSION }} linux_gcc_64 \
+              --outputdir "${QT_INSTALL_DIR}" 2>&1 | tail -15
+          fi
+
+          echo "### Installed trees:"
+          find "${QT_INSTALL_DIR}" -maxdepth 2 -mindepth 2 -type d | sort
 
       - name: Locate Qt and export its path
         id: qt
         run: |
           set -euo pipefail
-          echo "### Looking for Qt under ${QT_INSTALL_DIR}"
-          find "${QT_INSTALL_DIR}" -maxdepth 4 -name 'Qt6Config.cmake' -print || true
 
-          QT_CONFIG=$(find "${QT_INSTALL_DIR}" -maxdepth 5 -name 'Qt6Config.cmake' -print -quit || true)
-          if [ -z "$QT_CONFIG" ]; then
-            echo "::error::Could not locate a Qt 6 installation."
-            find "${QT_INSTALL_DIR}" -maxdepth 4 -type d | head -40 || true
+          # aqt writes to a fully deterministic location:
+          #   <outputdir>/<version>/<archdir>/
+          # so build that path first and only fall back to a search if the
+          # expected layout is not there. Searching with a fixed maxdepth was
+          # the previous bug: Qt6Config.cmake sits seven levels down
+          # (Qt/6.7.2/android_arm64_v8a/lib/cmake/Qt6/Qt6Config.cmake) and the
+          # search depth was five.
+          EXPECTED="${QT_INSTALL_DIR}/${{ env.QT_VERSION }}/android_arm64_v8a"
+          echo "### Expected Qt dir: $EXPECTED"
+
+          if [ -d "$EXPECTED" ]; then
+            QT_ROOT="$EXPECTED"
+          else
+            echo "### Expected layout missing, searching instead"
+            CONFIG=$(find "${QT_INSTALL_DIR}" -name 'Qt6Config.cmake' -print -quit || true)
+            if [ -z "$CONFIG" ]; then
+              echo "::error::Could not locate a Qt 6 installation under ${QT_INSTALL_DIR}"
+              echo "### Top level of the install dir:"
+              ls -la "${QT_INSTALL_DIR}" || true
+              echo "### Two levels deep:"
+              find "${QT_INSTALL_DIR}" -maxdepth 2 -type d | head -40 || true
+              exit 1
+            fi
+            QT_ROOT=$(dirname "$(dirname "$CONFIG")")
+          fi
+
+          echo "### Qt root: $QT_ROOT"
+          echo "### Contents:"
+          ls "$QT_ROOT" || true
+
+          CONFIG="$QT_ROOT/lib/cmake/Qt6/Qt6Config.cmake"
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Qt6Config.cmake not found at $CONFIG"
+            echo "### lib/cmake contents:"
+            ls "$QT_ROOT/lib/cmake" | head -40 || true
             exit 1
           fi
-          QT_ROOT=$(dirname "$(dirname "$QT_CONFIG")")
-          echo "Qt root: $QT_ROOT"
+          echo "### Found: $CONFIG"
+
           echo "qt_root=$QT_ROOT" >> "$GITHUB_OUTPUT"
           echo "QT_ROOT_DIR=$QT_ROOT" >> "$GITHUB_ENV"
 
-          echo "### Qt cmake packages"
-          ls "$QT_ROOT/lib/cmake" | head -30 || true
+          # Host Qt, needed for the qmlcachegen / qmltyperegistrar tools that
+          # run on the build machine.
+          HOST_ROOT="${QT_INSTALL_DIR}/${{ env.QT_VERSION }}/gcc_64"
+          if [ ! -f "$HOST_ROOT/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+            echo "::error::Host Qt not found at $HOST_ROOT"
+            find "${QT_INSTALL_DIR}" -maxdepth 2 -mindepth 2 -type d | sort || true
+            exit 1
+          fi
+          echo "### Host Qt: $HOST_ROOT"
+          echo "QT_HOST_PATH=$HOST_ROOT" >> "$GITHUB_ENV"
+
+          echo "### Available Qt modules (cmake packages):"
+          ls "$QT_ROOT/lib/cmake" | head -40
+
+          for mod in Core Gui Qml Quick QuickControls2 Network Sql Svg; do
+            if [ -d "$QT_ROOT/lib/cmake/Qt6${mod}" ]; then
+              echo "  OK   Qt6${mod}"
+            else
+              echo "::error::Qt6${mod} is missing from this Qt installation"
+              exit 1
+            fi
+          done
+          echo "### All required Qt modules are present."
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -299,6 +393,7 @@ jobs:
           set -euo pipefail
           echo "### Environment"
           echo "QT_ROOT_DIR       = ${QT_ROOT_DIR}"
+          echo "QT_HOST_PATH      = ${QT_HOST_PATH}"
           echo "ANDROID_NDK_HOME  = ${ANDROID_NDK_HOME}"
           echo "ANDROID_SDK_ROOT  = ${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           echo
@@ -306,13 +401,13 @@ jobs:
           cmake -S . -B build-android \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${QT_HOST_PATH}" \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM="android-${{ env.ANDROID_API_LEVEL }}" \
             -DANDROID_STL=c++_shared \
             -DANDROID_NDK="${ANDROID_NDK_HOME}" \
-            -DQT_HOST_PATH="${QT_ROOT_DIR}" \
+            -DQT_HOST_PATH="${QT_HOST_PATH}" \
             -DQT_ANDROID_BUILD_ALL_ABIS=OFF
 
       - name: Build
