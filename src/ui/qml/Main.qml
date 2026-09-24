@@ -23,12 +23,40 @@ ApplicationWindow {
 
     color: Theme.background
 
-    // Kick off core initialisation as soon as the window exists. The call is
-    // idempotent, so a re-creation of the window (rotation) is harmless.
+    // Kick off core initialisation as soon as the window exists.
+    //
+    // AppController::initialize() is synchronous and Q_INVOKABLE, so the call
+    // returns a bool that says whether storage, the database and the models
+    // are ready. Initialisation is idempotent, so re-creating the window
+    // (rotation, for example) is harmless.
+    //
+    // The outcome is written to the Qt log so `adb logcat` shows it without a
+    // debugger attached. That is the first thing to check when the app shows a
+    // blank screen on a real device.
     Component.onCompleted: {
-        if (!App.ready)
-            App.initialize();
+        let ok = App.ready;
+        if (!ok)
+            ok = App.initialize();
+
+        startupSucceeded = ok;
+
+        if (ok) {
+            console.info("FenSuCloudAlbum: core ready"
+                         + " platform=" + App.platformName
+                         + " storage=" + App.storageRoot
+                         + " database=" + App.databasePath);
+        } else {
+            console.warn("FenSuCloudAlbum: core NOT ready."
+                         + " lastError=" + (App.lastError.length > 0
+                                            ? App.lastError
+                                            : "(none reported)"));
+        }
     }
+
+    // True once Component.onCompleted has run the initialisation and it
+    // reported success. Declared along with the window so the overlay below
+    // can bind to it.
+    property bool startupSucceeded: false
 
     // -----------------------------------------------------------------------
     // Content
@@ -123,27 +151,38 @@ ApplicationWindow {
     }
 
     // -----------------------------------------------------------------------
-    // Storage readiness overlay
+    // Startup overlay
     // -----------------------------------------------------------------------
-    // While the database is being created / migrated the pages would show
-    // "No albums yet", which reads like data loss. Cover the screen with a
-    // short progress state instead.
+    // While core initialisation is running the pages would show "No albums
+    // yet", which reads like data loss, so the screen is covered with a short
+    // progress state.
+    //
+    // If initialisation fails, this overlay gets out of the way instead of
+    // spinning forever. The error banner above is then the only thing on
+    // screen and it says what went wrong, which the earlier revision did not:
+    // the banner used to sit underneath a full-screen spinner.
     Rectangle {
+        id: readinessOverlay
+
         anchors.fill: parent
-        visible: !App.ready
+        visible: !App.ready && !startupSucceeded && App.lastError.length === 0
         color: Theme.background
 
         Column {
             anchors.centerIn: parent
+            width: parent.width * 0.8
             spacing: Theme.spacingMd
 
             BusyIndicator {
                 anchors.horizontalCenter: parent.horizontalCenter
-                running: parent.parent.visible
+                running: readinessOverlay.visible
             }
 
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
                 text: qsTr("Preparing your library\u2026")
                 font.pixelSize: Theme.fontBody
                 color: Theme.textSecondary

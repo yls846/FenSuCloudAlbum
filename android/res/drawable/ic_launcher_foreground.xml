@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground: a white cloud above a photo frame.
+
+  Everything is kept inside the 72x72 safe zone (roughly x, y from 18 to 90)
+  because a launcher is free to mask the outer ring away. The shapes mirror
+  the PNG icons so both variants look like the same app.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- ================= cloud ================= -->
+    <!-- left lobe -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M37,45 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    <!-- right lobe -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M71,45 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+    <!-- crown -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,39 m-11,0 a11,11 0 1,0 22,0 a11,11 0 1,0 -22,0" />
+    <!-- base bar joining the lobes -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M37,42 L71,42 A4,4 0 0 1 71,50 L37,50 A4,4 0 0 1 37,42 Z" />
+
+    <!-- ================= photo frame ================= -->
+    <!-- white frame -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,56 L68,56 A3,3 0 0 1 71,59 L71,76 A3,3 0 0 1 68,79 L40,79 A3,3 0 0 1 37,76 L37,59 A3,3 0 0 1 40,56 Z" />
+
+    <!-- blue window inside the frame -->
+    <path
+        android:fillColor="#1A73E8"
+        android:pathData="M41,59 L67,59 A1,1 0 0 1 68,60 L68,75 A1,1 0 0 1 67,76 L41,76 A1,1 0 0 1 40,75 L40,60 A1,1 0 0 1 41,59 Z" />
+
+    <!-- sun -->
+    <path
+        android:fillColor="#FFD600"
+        android:pathData="M47,64 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+
+    <!-- hills -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,76 L52,66 L61,76 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,76 L64,68 L68,72 L68,76 Z" />
+</vector>

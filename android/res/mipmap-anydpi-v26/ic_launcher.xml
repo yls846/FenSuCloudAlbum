@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive launcher icon for Android 8.0 (API 26) and later.
+
+  Devices on API 26+ use this and ignore the per-density PNGs, which remain
+  for older releases. ic_launcher_round.xml is the same content because the
+  launcher applies the mask itself; a separate round PNG is only needed on
+  pre-26 devices, and those are covered by mipmap-*/ic_launcher_round.png.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

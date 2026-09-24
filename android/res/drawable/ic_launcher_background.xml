@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon background (Android 8.0 / API 26 and later).
+
+  The 108x108 viewport is the adaptive icon spec: the launcher may mask it to
+  any shape and only guarantees the middle 72x72 is visible, so the artwork
+  stays inside a safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Solid Google Photos style blue. The launcher applies the mask. -->
+    <path
+        android:fillColor="#1A73E8"
+        android:pathData="M0,0h108v108h-108z" />
+</vector>
