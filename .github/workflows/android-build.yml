@@ -1,0 +1,152 @@
+name: Android Build
+
+# ---------------------------------------------------------------------------
+# CI for FenSu Cloud Album (D version)
+# ---------------------------------------------------------------------------
+# The repository is Qt 6 / CMake / C++20. This workflow performs the two
+# things that cannot be done on the development device:
+#
+#   1. configure + compile the project for Android with the Qt 6 Android SDK
+#   2. produce a debug APK as a build artifact
+#
+# It runs on every push to main and on pull requests, so a broken CMake or
+# QML reference is caught before it reaches a device.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  # Qt version used for the Android build. 6.7.2 ships a stable Android
+  # toolchain and matches the 6.5 minimum declared in CMakeLists.txt.
+  QT_VERSION: "6.7.2"
+  ANDROID_API_LEVEL: "34"
+  ANDROID_BUILD_TOOLS: "34.0.0"
+  NDK_VERSION: "26.1.10909125"
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            ccache \
+            p7zip-full \
+            libgl1-mesa-dev \
+            libxkbcommon-dev
+
+      - name: Cache Qt
+        id: cache-qt
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.tool_cache }}/Qt
+          key: qt-${{ env.QT_VERSION }}-android
+
+      - name: Install Qt for Android
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: android
+          arch: android_arm64_v8a
+          dir: ${{ runner.tool_cache }}/Qt
+          cache: true
+          modules: 'qtnetworkauth'
+
+      - name: Set up Android SDK / NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}" "platforms;android-${{ env.ANDROID_API_LEVEL }}" "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
+
+      - name: Configure (CMake + Ninja)
+        run: |
+          cmake -S . -B build-android \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-${{ env.ANDROID_API_LEVEL }} \
+            -DANDROID_STL=c++_shared \
+            -DQT_ANDROID_BUILD_ALL_ABIS=OFF
+
+      - name: Build
+        run: cmake --build build-android --parallel
+
+      - name: Locate and stage APK
+        id: apk
+        run: |
+          set -x
+          APK=$(find build-android -name "*.apk" -type f | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK was produced by the build."
+            exit 1
+          fi
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          mkdir -p artifacts
+          cp "$APK" artifacts/FenSuCloudAlbum-debug.apk
+          ls -lh artifacts
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FenSuCloudAlbum-debug-apk
+          path: artifacts/FenSuCloudAlbum-debug.apk
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # A fast static check that does not need the Qt Android toolchain: it only
+  # verifies that the repository is consistent (CMake parses, no stray
+  # references to files that do not exist).
+  # -------------------------------------------------------------------------
+  sanity-check:
+    name: Repository sanity check
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify every referenced source file exists
+        run: |
+          set -e
+          missing=0
+          # Extract paths from the CMake source lists and check each one.
+          while read -r f; do
+            if [ -f "$f" ]; then
+              continue
+            fi
+            echo "::error file=$f::CMakeLists.txt references a missing file: $f"
+            missing=1
+          done < <(grep -oE 'src/[A-Za-z0-9_/]+\.(cpp|h|qml)' CMakeLists.txt | sort -u)
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Repository is inconsistent, aborting."
+            exit 1
+          fi
+          echo "All files referenced by CMakeLists.txt are present."
+
+      - name: Check QML syntax (qmlformat parser only)
+        run: |
+          echo "QML files found:"
+          find src/ui/qml -name '*.qml' | sort

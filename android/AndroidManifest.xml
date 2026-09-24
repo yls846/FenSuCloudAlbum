@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!--
+  FenSu Cloud Album - Android manifest (D version, v0.1.0)
+
+  This file is referenced through QT_ANDROID_PACKAGE_SOURCE_DIR in
+  CMakeLists.txt. Qt merges its own manifest entries (activity, Qt libraries,
+  QtActivity extras) into the template that ends up in the APK.
+
+  Permissions requested here are deliberately minimal for the first release:
+  the app only touches its own sandbox plus the shared network for WebDAV.
+  Camera / media gallery permissions are NOT requested yet because v0.1 does
+  not read the system gallery.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.fensu.cloudalbum"
+    android:installLocation="auto"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <!-- WebDAV transfers. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Needed so a long upload survives the screen turning off. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+      Large-file transfers are the whole point of the app. Android 13+ may
+      still report a warning for very large heaps, so we ask for a largeHeap
+      and declare that the app does not require a touchscreen-class device.
+    -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <supports-screens
+        android:anyDensity="true"
+        android:largeScreens="true"
+        android:normalScreens="true"
+        android:smallScreens="true" />
+
+    <application
+        android:name="org.qtproject.qt.android.bindings.QtApplication"
+        android:label="FenSu Cloud Album"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:allowBackup="true"
+        android:requestLegacyExternalStorage="false"
+        android:extractNativeLibs="true"
+        android:allowNativeHeapPointerTagging="false">
+
+        <activity
+            android:name="org.qtproject.qt.android.bindings.QtActivity"
+            android:label="FenSu Cloud Album"
+            android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="FenSuCloudAlbum" />
+
+            <!-- Qt reads these to decide whether to load the QML as a
+                 fragment or as the activity content view. -->
+            <meta-data
+                android:name="android.app.extract_android_style"
+                android:value="minimal" />
+        </activity>
+    </application>
+</manifest>

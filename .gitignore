@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+build/
+build-*/
+out/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+
+# Qt generated
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.moc
+.qmake.stash
+qmlcache/
+*.qmlc
+*.jsc
+
+# Generated QML module registration (created by qt_add_qml_module)
+*_qmltyperegistrations.cpp
+*qmltypes
+
+# ---------------------------------------------------------------------------
+# Android
+# ---------------------------------------------------------------------------
+.gradle/
+local.properties
+.gradle-cache/
+android/build/
+android/app/build/
+*.keystore
+*.jks
+!debug.keystore
+
+# ---------------------------------------------------------------------------
+# IDE / editor
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.user
+*.user.*
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# OS noise
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Secrets - never commit tokens / credentials
+# ---------------------------------------------------------------------------
+.env
+*.env.local
+secrets.properties
